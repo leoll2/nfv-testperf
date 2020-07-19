@@ -132,6 +132,9 @@ get_make_cpus() {
         makecpus=$(echo $cpunum*0.7 | bc)
         makecpus=$(printf "%.0f\n" $makecpus)
     fi
+    if [ "$makecpus" == 0 ] ; then
+        makecpus=1
+    fi
 
     echo $makecpus
 }
