@@ -1,7 +1,7 @@
 # variables that can be overwritten from outside
-DIR_ROOTFS	?= ~/testbed/install/rootfs
+DIR_ROOTFS	?= $(HOME)/testbed/install/rootfs
 RTE_TARGET	?= x86_64-native-linuxapp-gcc
-RTE_SDK		?= /home/gara/testbed/install/dpdk-19.05/share/dpdk
+RTE_SDK		?= $(HOME)/testbed/install/dpdk-19.05/share/dpdk
 
 # variables needed to include header files
 THIS_FILE		:= $(lastword $(MAKEFILE_LIST))
@@ -22,14 +22,18 @@ APP		= testapp
 SRCS-y		+= main.c common.c stats.c timestamp.c dpdk.c
 SRCS-y		+= server.c client.c clientst.c send.c recv.c
 SRCS-y		+= dpdk-server.c dpdk-client.c dpdk-clientst.c dpdk-send.c dpdk-recv.c
+SRCS-y		+= netmap-send.c netmap-recv.c netmap/pkt-gen.c
 
 # do I need override on CFLAGS? also, change -O2 to -ggdb -O0 when debug
 CPPFLAGS	+= -iquote $(THIS_DIR)/inc
-CFLAGS		+= -Wall -Wextra -pedantic -Werror -march=native -O2 # -O0 -ggdb
-#LDFLAGS		+= -pthread
+CFLAGS		+= -Wall -Wextra -pedantic -Werror -march=native -pipe -O2 # -O0 -ggdb
+LDLIBS		+= -lpthread -lm -lnetmap -lrt
 
 # dpdk external app makefile
 include $(RTE_SDK)/mk/rte.extapp.mk
+
+netmap/pkt-gen.o: netmap/pkt-gen.c
+	cc -c -O2 -pipe -Werror -Wall -Wextra -Wno-address-of-packed-member -DNO_PCAP $< -o $@
 
 # rewriting installation rule to copy target in container
 install: build _postinstall __postinstall

@@ -15,6 +15,7 @@ fi
 command=send
 use_dpdk=0
 use_sriov=0
+use_netmap=0
 whichcont=DPDKTest
 
 echo "ARGS: $@"
@@ -31,6 +32,11 @@ while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             ;;
         s)
             use_sriov=1
+            shift
+            OPTIND=1
+            ;;
+        n)
+            use_netmap=1
             shift
             OPTIND=1
             ;;
@@ -83,9 +89,18 @@ if [ "$use_dpdk" -eq "1" ] ; then
     command=dpdk-${command}
 fi
 
+if [ "$use_netmap" -eq "1" ] ; then
+    command=netmap-${command}
+fi
+
 if [ ! -e /conf/${whichcont}_rc.conf ] ; then
     echo "ERROR: WRONG PARAMETER TO -m OPTION: ${whichcont}"
     echo "       USE A VALID CONTAINER NAME"
+    exit 1
+fi
+
+if [ "$use_dpdk" -eq 1 ] && [ "$use_netmap" -eq 1 ] ; then
+    echo "ERROR: CANNOT USE DPDK AND NETMAP TOGETHER"
     exit 1
 fi
 

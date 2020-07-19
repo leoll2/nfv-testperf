@@ -17,6 +17,10 @@ extern int dpdk_clientst_body(int argc, char *argv[]);
 extern int dpdk_recv_body(int argc, char *argv[]);
 extern int dpdk_send_body(int argc, char *argv[]);
 
+// netmap stuff
+extern int netmap_recv_body(int argc, char *argv[]);
+extern int netmap_send_body(int argc, char *argv[]);
+
 typedef int (*main_body_t)(int, char **);
 
 static const char *const commands_n[] = {
@@ -31,6 +35,9 @@ static const char *const commands_n[] = {
     "dpdk-clientst",
     "dpdk-send",
     "dpdk-recv",
+
+    "netmap-send",
+    "netmap-recv",
 };
 
 static const main_body_t commands_f[] = {
@@ -45,6 +52,9 @@ static const main_body_t commands_f[] = {
     dpdk_clientst_body,
     dpdk_send_body,
     dpdk_recv_body,
+
+    netmap_send_body,
+    netmap_recv_body,
 };
 
 static const int num_commands = sizeof(commands_f) / sizeof(main_body_t);

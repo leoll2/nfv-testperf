@@ -151,7 +151,7 @@ function print_help() {
         "The directory in which results should be written"
 
     printf "$pargformat" \
-        "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge]" \
+        "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge|vale]" \
         "The virtual switch used to exchange packets"
 
     printf "$pargformat" \
@@ -547,6 +547,17 @@ function start_vswitch() {
         # This is not an actual switch, it is just used to start tests using normal kernel sockets
         # Hence this does nothing
         ;;
+    vale)
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            # Create a veth (two endpoints)
+            endpoint_host_name=veth_${i}_host
+            endpoint_guest_name=veth_${i}_guest
+            sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
+
+            # Connect one endpoint to vale switch
+            sudo vale-ctl -a vale0:${endpoint_host_name}   # TODO l'altro endpoint va spostato nel guest
+        done
+        ;;
     *)
         echo "NOT A VALID VSWITCH NAME!"
         exit 1
@@ -616,6 +627,13 @@ function stop_vswitch() {
     linux-bridge)
         # This is not an actual switch, it is just used to start tests using normal kernel sockets
         # Hence this does nothing
+        ;;
+    vale-ctl)
+        # There is no process to kill, just delete the veth
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            endpoint_host_name=veth_${i}_host
+            sudo ip link delete ${endpoint_host_name}
+        done
         ;;
     *)
         echo "NOT A VALID VSWITCH NAME!"
@@ -739,6 +757,16 @@ function prepare_outdir() {
     # rm $outdir/${CONT_B}_`get_command_name_cont_b`.log 2>/dev/null || true
 }
 
+function move_veths_to_containers() {
+    # This functions moves one of the veth endpoints to the container.
+    # It assumes that the containers are already running
+    for i in "${!LXC_CONT_NAMES[@]}"; do
+        cont_pid=$(sudo lxc-info -pHn ${LXC_CONT_NAMES[i]})
+        endpoint_host_name=veth_${i}_host
+        sudo ip link set dev ${endpoint_guest_name} netns 29730 name ${endpoint_guest_name}
+    done
+}
+
 function start_applications() {
     echo "Starting the two applications, one per each container..."
 
@@ -747,6 +775,11 @@ function start_applications() {
     for i in "${!LXC_CONT_NAMES[@]}"; do
         # Start Container
         sudo lxc-start -n ${LXC_CONT_NAMES[i]}
+
+        # If using netmap, move one veth endpoint into the container
+        if [ $vswitch == vale ]; then
+            move_veths_to_containers()
+        fi
 
         # Launch application inside container
         screen -d -S screen_${LXC_CONT_NAMES[i]} -L -Logfile ${outdir}/${LXC_CONT_NAMES[i]}_${LXC_CONT_CMDNAMES[i]}.log -m \
