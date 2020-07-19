@@ -30,7 +30,7 @@ parse_parameters() {
 
     # NOTICE: underscores are important
     if [ -z "$args" ] || [[ "$args" == *_all_* ]] ; then
-        args="_all_rootfs_lxc_dpdk_ovs_vpp_snabb_app_"
+        args="_all_rootfs_lxc_dpdk_ovs_vpp_snabb_netmap_app_"
     fi
 }
 
@@ -651,6 +651,70 @@ snabb_remove() {
     echo_action "RM $DIR_SNABB_SRC" ;   rm -rf $DIR_SNABB_SRC
 }
 
+############## NETMAP FUNCTIONS ###############
+
+netmap_install() {
+    echo_section "Installing netmap"
+
+    # If already installed, skip
+    if [ -e $NETMAP_CHECK_FILE ] ; then
+        echo_action "ALREADY INSTALLED -- SKIPPING"
+        return 0
+    fi
+
+    rm -rf $DIR_NETMAP_SRC
+    git clone https://github.com/luigirizzo/netmap $DIR_NETMAP_SRC
+
+    pushd $DIR_NETMAP_SRC/LINUX
+        echo_action "NETMAP CONFIGURE BUILD"
+        # TODO find a better way to deal with the kernel reference
+        ./configure --kernel-dir=/lib/modules/$(uname -r)/build --kernel-sources=/home/llai/linux
+
+	    echo_action "NETMAP BUILD"
+	    make
+
+        echo_action "NETMAP APPS BUILD"
+        sudo make apps
+
+	    echo_action "NETMAP INSTALL"
+	    sudo make install
+    popd
+
+    if lsmod | grep veth &> /dev/null ; then
+        sudo modprobe -r veth
+    fi
+
+    sudo insmod /lib/modules/$(uname -r)/extra/netmap.ko
+    sudo insmod /lib/modules/$(uname -r)/extra/veth.ko
+
+    touch $NETMAP_CHECK_FILE
+}
+
+netmap_remove() {
+    echo_section "Removing netmap"
+
+    # IF NOT INSTALLED, SKIP
+    if [ ! -e $NETMAP_CHECK_FILE ]; then
+        echo_action "NOT INSTALLED -- SKIPPING"
+        return 0
+    fi
+
+    # Unload the modules (if loaded)
+    if lsmod | grep veth &> /dev/null ; then
+        sudo modprobe -r veth
+        sudo insmod /lib/modules/$(uname -r)/kernel/drivers/net/veth.ko
+    fi
+    if lsmod | grep netmap &> /dev/null ; then
+        sudo modprobe -r netmap
+    fi
+
+    # Remove the modules from disk
+    sudo rm -f /lib/modules/$(uname -r)/extra/veth.ko
+    sudo rm -f /lib/modules/$(uname -r)/extra/netmap.ko
+
+    rm -rf $DIR_NETMAP_SRC
+}
+
 ############## TESTAPP FUNCTIONS ##############
 
 # TODO:
@@ -763,11 +827,13 @@ DIR_DPDK_INSTALL=$DIR_INSTALL/dpdk-${DPDK_VERSION}
 
 DIR_OVS_SRC=$DIR_SRC/ovs
 DIR_SNABB_SRC=$DIR_SRC/snabb
+DIR_NETMAP_SRC=$DIR_SRC/netmap
 
 ROOTFS_CHECK_FILE=$DIR_INSTALL/.rootfs-installed
 DPDK_CHECK_FILE=$DIR_INSTALL/.dpdk-${DPDK_VERSION}-installed
 OVS_CHECK_FILE=$DIR_INSTALL/.ovs-${OVS_VERSION}-installed
 SNABB_CHECK_FILE=$DIR_INSTALL/.snabb-installed
+NETMAP_CHECK_FILE=$DIR_INSTALL/.netmap-installed
 
 SNABB_PROGRAM_NAME=custom_switch
 DIR_SNABB_PROGRAM=$DIR_SNABB_SRC/src/program/$SNABB_PROGRAM_NAME
@@ -796,6 +862,7 @@ i)
     [[ "$args" == *_ovs_*       ]]  && ovs_install
     [[ "$args" == *_vpp_*       ]]  && vpp_install
     [[ "$args" == *_snabb_*     ]]  && snabb_install
+    [[ "$args" == *_netmap_*    ]]  && netmap_install
     [[ "$args" == *_app_*       ]]  && testapp_install
 
     finalize_install
@@ -809,6 +876,7 @@ d)
     [[ "$args" == *_dpdk_*      ]]  && dpdk_remove
     [[ "$args" == *_vpp_*       ]]  && vpp_remove
     [[ "$args" == *_snabb_*     ]]  && snabb_remove
+    [[ "$args" == *_netmap_*    ]]  && netmap_remove
     # [[ "$args" == *_app_*       ]]  && testapp_remove
     [[ "$args" == *_lxc_*       ]]  && lxc_remove
     [[ "$args" == *_rootfs_* ]]  && rootfs_remove
