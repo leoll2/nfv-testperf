@@ -16,9 +16,12 @@
 #include "newcommon.h"
 #include "stats.h"
 
+#include "netmap/pkt-gen.h"
 
 int netmap_recv_body(int argc, char *argv[])
 {
+    int netmap_argc = 1;
+    char **netmap_argv = NULL;
     struct config conf = CONFIG_STRUCT_INITIALIZER;
 
     // Default configuration for local program
@@ -34,14 +37,28 @@ int netmap_recv_body(int argc, char *argv[])
 
     print_config(&conf);
 
-    signal(SIGINT, handle_sigint);
+    netmap_argv = malloc(sizeof(char *));
 
-    /* TODO rework*/
-    while(true)
-        printf("[TODO] netmap-recv");
+    netmap_argv[0] = "netmap_receiver";
 
-    // Should never get here actually
-    close(conf.sock_fd);
+    /* Function */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-f";
+    netmap_argv[netmap_argc-1] = "rx";
+
+    /* Interface */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-i";
+    netmap_argv[netmap_argc-1] = "netmap:veth_1_guest"; // TODO this must be parametric!
+
+    /* Last arg must be NULL by convention */
+    netmap_argv[netmap_argc] = NULL;
+
+    printf("Launching netmap_main_loop on receiver\n");
+    netmap_main_loop(netmap_argc, netmap_argv);
+    printf("Finished netmap_main_loop on receiver\n");
 
     return EXIT_SUCCESS;
 }

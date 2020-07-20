@@ -39,14 +39,48 @@ int netmap_send_body(int argc, char *argv[])
     print_config(&conf);
 
     netmap_argv = malloc(sizeof(char *));
+
     netmap_argv[0] = "netmap_sender";
+
+    /* Function */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-f";
+    netmap_argv[netmap_argc-1] = "tx";
+    
+    /* Interface */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-i";
+    netmap_argv[netmap_argc-1] = "netmap:veth_0_guest"; // TODO this must be parametric!
 
     /* Packet size */
     netmap_argc += 2;
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-l";
-    netmap_argv = malloc(16 * sizeof(char));   // 16 digits should be enough
+    netmap_argv[netmap_argc-1] = malloc(16 * sizeof(char));   // 16 digits should be enough
     snprintf(netmap_argv[netmap_argc-1], 16, "%d", conf.pkt_size);
+
+    /* Burst size */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-b";
+    netmap_argv[netmap_argc-1] = malloc(16 * sizeof(char));   // 16 digits should be enough
+    snprintf(netmap_argv[netmap_argc-1], 16, "%d", conf.bst_size);
+
+    /* Rate */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-R";
+    netmap_argv[netmap_argc-1] = malloc(16 * sizeof(char));   // 16 digits should be enough
+    snprintf(netmap_argv[netmap_argc-1], 16, "%ld", conf.rate);
+    
+    /* Count */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-n";
+    netmap_argv[netmap_argc-1] = malloc(32 * sizeof(char));   // 32 digits should be enough
+    snprintf(netmap_argv[netmap_argc-1], 32, "%ld", conf.rate * 60); // TODO retrieve timeout somewhere from the configuration
 
     /* Last arg must be NULL by convention */
     netmap_argv[netmap_argc] = NULL;

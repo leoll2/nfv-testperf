@@ -42,7 +42,7 @@ do
         exit 0
         ;;
     \? )
-        echo "Invalid option: -$OPTARG"
+        echo "Invalid option [run_remote_test.bash]: -$OPTARG"
         exit 1
         ;;
     : )

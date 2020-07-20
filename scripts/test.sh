@@ -23,7 +23,7 @@ OPTIND=1
 
 # Iterate through arguments and options until -- is reached
 while [ $# -gt 0 ] && [ "$1" != "--" ]; do
-    while getopts ":dsm:" opt; do
+    while getopts ":dsnm:" opt; do
         case ${opt} in
         d)
             use_dpdk=1
@@ -47,7 +47,7 @@ while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             OPTIND=1
             ;;
         \?)
-            echo "Invalid option: $OPTARG"
+            echo "Invalid option [test.sh]: $OPTARG"
             exit 1
             ;;
         :)

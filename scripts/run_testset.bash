@@ -185,7 +185,7 @@ function parse_parameters() {
             exit 0
             ;;
         \? )
-            echo "Invalid option: -"$OPTARG""
+            echo "Invalid option [run_testset.sh]: -"$OPTARG""
             exit 1
             ;;
         : )

@@ -310,7 +310,7 @@ function parse_parameters() {
             exit 0
             ;;
         \? )
-            echo "Invalid option: -$OPTARG"
+            echo "Invalid option [run_test_local.sh]: -$OPTARG"
             exit 1
             ;;
         : )
@@ -555,7 +555,7 @@ function start_vswitch() {
             sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
 
             # Connect one endpoint to vale switch
-            sudo vale-ctl -a vale0:${endpoint_host_name}   # TODO l'altro endpoint va spostato nel guest
+            sudo vale-ctl -a vale0:${endpoint_host_name}
         done
         ;;
     *)
@@ -628,11 +628,14 @@ function stop_vswitch() {
         # This is not an actual switch, it is just used to start tests using normal kernel sockets
         # Hence this does nothing
         ;;
-    vale-ctl)
+    vale)
         # There is no process to kill, just delete the veth
         for i in "${!LXC_CONT_NAMES[@]}" ; do
             endpoint_host_name=veth_${i}_host
-            sudo ip link delete ${endpoint_host_name}
+            sudo vale-ctl -d vale0:${endpoint_host_name}
+            if ! sudo ip link delete ${endpoint_host_name}; then
+                echo "[note] can't stop ${endpoint_host_name} because not found"
+            fi
         done
         ;;
     *)
@@ -665,11 +668,14 @@ function vswitch_cmdline_option() {
     linux-bridge*)
         ;;
     sriov )
-        echo "-s"
+        printf "%s\n" "-s"
+        ;;
+    vale )
+        printf "%s\n" "-n"
         ;;
     * )
         # Use simple DPDK
-        echo "-d"
+        printf "%s\n" "-d"
         ;;
     esac
 }
@@ -757,14 +763,15 @@ function prepare_outdir() {
     # rm $outdir/${CONT_B}_`get_command_name_cont_b`.log 2>/dev/null || true
 }
 
-function move_veths_to_containers() {
+function move_veth_to_container() {
     # This functions moves one of the veth endpoints to the container.
-    # It assumes that the containers are already running
-    for i in "${!LXC_CONT_NAMES[@]}"; do
-        cont_pid=$(sudo lxc-info -pHn ${LXC_CONT_NAMES[i]})
-        endpoint_host_name=veth_${i}_host
-        sudo ip link set dev ${endpoint_guest_name} netns 29730 name ${endpoint_guest_name}
-    done
+    # It assumes that the container is already running
+    i=$1
+    cont_pid=$(sudo lxc-info -pHn ${LXC_CONT_NAMES[i]})
+    endpoint_guest_name=veth_${i}_guest
+    sudo ip link set dev ${endpoint_guest_name} netns ${cont_pid} name ${endpoint_guest_name}
+    # Enable the interface (it goes DOWN after moving it)
+    sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ip link set ${endpoint_guest_name} up
 }
 
 function start_applications() {
@@ -776,9 +783,12 @@ function start_applications() {
         # Start Container
         sudo lxc-start -n ${LXC_CONT_NAMES[i]}
 
-        # If using netmap, move one veth endpoint into the container
         if [ $vswitch == vale ]; then
-            move_veths_to_containers()
+            # Make /dev/netmap visible inside guest
+            sudo lxc-device -n ${LXC_CONT_NAMES[i]} add /dev/netmap
+
+            # Move one veth endpoint into the container
+            move_veth_to_container $i
         fi
 
         # Launch application inside container
@@ -865,7 +875,7 @@ function wait_schedule() {
 #                              CONSTANTS AND DIRS                              #
 ################################################################################
 
-vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge"
+vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge vale"
 dimension_list="throughput latency latencyst"
 
 # TODO: READ AN ENVIRONMENT VARIABLE
