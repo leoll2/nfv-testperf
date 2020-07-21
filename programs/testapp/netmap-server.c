@@ -18,7 +18,7 @@
 
 #include "netmap/pkt-gen.h"
 
-int netmap_recv_body(int argc, char *argv[])
+int netmap_server_body(int argc, char *argv[])
 {
     int netmap_argc = 1;
     char **netmap_argv = NULL;
@@ -39,13 +39,13 @@ int netmap_recv_body(int argc, char *argv[])
 
     netmap_argv = malloc(sizeof(char *));
 
-    netmap_argv[0] = "netmap_receiver";
+    netmap_argv[0] = "netmap_pong";
 
     /* Function */
     netmap_argc += 2;
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-f";
-    netmap_argv[netmap_argc-1] = "rx";
+    netmap_argv[netmap_argc-1] = "pong";
 
     /* Interface */
     netmap_argc += 2;

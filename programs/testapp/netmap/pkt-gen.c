@@ -64,10 +64,6 @@
 
 #include <pthread.h>
 
-#ifndef NO_PCAP
-#include <pcap/pcap.h>
-#endif
-
 #include "ctrs.h"
 #include "pkt-gen.h"
 
@@ -86,7 +82,6 @@ static inline void CPU_SET(uint32_t i, cpuset_t *p)
 }
 
 #define pthread_setaffinity_np(a, b, c) !SetThreadAffinityMask(a, *c)    //((void)a, 0)
-#define TAP_CLONEDEV	"/dev/tap"
 #define AF_LINK	18	//defined in winsocks.h
 #define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
 #include <net/if_dl.h>
@@ -179,12 +174,6 @@ static inline void CPU_SET(uint32_t i, cpuset_t *p)
     do {struct timespec t0 = {0,0}; *(b) = t0; } while (0)
 #endif  /* __APPLE__ */
 
-const char *default_payload="netmap pkt-gen DIRECT payload\n"
-"http://info.iet.unipi.it/~luigi/netmap/ ";
-
-const char *indirect_payload="netmap pkt-gen indirect payload\n"
-"http://info.iet.unipi.it/~luigi/netmap/ ";
-
 int verbose = 0;
 int normalize = 1;
 
@@ -276,14 +265,12 @@ struct glob_arg {
 #define OPT_TS		16	/* add a timestamp */
 #define OPT_INDIRECT	32	/* use indirect buffers, tx only */
 #define OPT_DUMP	64	/* dump rx/tx traffic */
+#define OPT_CONSUME	128 	/* consume rx traffic */
 #define OPT_RUBBISH	256	/* send wathever the buffers contain */
 #define OPT_RANDOM_SRC  512
 #define OPT_RANDOM_DST  1024
 #define OPT_PPS_STATS   2048
     int dev_type;
-#ifndef NO_PCAP
-    pcap_t *p;
-#endif
 
     int tx_rate;
     struct timespec tx_period;
@@ -307,7 +294,7 @@ struct glob_arg {
     int wait_link;
     int framing;		/* #bits of framing (for bw output) */
 };
-enum dev_type { DEV_NONE, DEV_NETMAP, DEV_PCAP, DEV_TAP };
+enum dev_type { DEV_NONE, DEV_NETMAP};
 
 enum {
     TD_TYPE_SENDER = 1,
@@ -601,21 +588,7 @@ system_ncpus(void)
 #define sdl_family     sll_family
 #define AF_LINK        AF_PACKET
 #define LLADDR(s)      s->sll_addr;
-#include <linux/if_tun.h>
-#define TAP_CLONEDEV	"/dev/net/tun"
 #endif /* __linux__ */
-
-#ifdef __FreeBSD__
-#include <net/if_tun.h>
-#define TAP_CLONEDEV	"/dev/tap"
-#endif /* __FreeBSD */
-
-#ifdef __APPLE__
-// #warning TAP not supported on apple ?
-#include <net/if_utun.h>
-#define TAP_CLONEDEV	"/dev/tap"
-#endif /* __APPLE__ */
-
 
 /*
  * parse the vale configuration in conf and put it in nmr.
@@ -1006,44 +979,20 @@ initialize_packet(struct targ *targ)
     void *udp_ptr;
     uint16_t paylen;
     uint32_t csum = 0;
-    const char *payload = targ->g->options & OPT_INDIRECT ?
-        indirect_payload : default_payload;
-    int i, l0 = strlen(payload);
-
-#ifndef NO_PCAP
-    char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *file;
-    struct pcap_pkthdr *header;
-    const unsigned char *packet;
-
-    /* Read a packet from a PCAP file if asked. */
-    if (targ->g->packet_file != NULL) {
-        if ((file = pcap_open_offline(targ->g->packet_file,
-                        errbuf)) == NULL)
-            D("failed to open pcap file %s",
-                    targ->g->packet_file);
-        if (pcap_next_ex(file, &header, &packet) < 0)
-            D("failed to read packet from %s",
-                    targ->g->packet_file);
-        if ((targ->frame = malloc(header->caplen)) == NULL)
-            D("out of memory");
-        bcopy(packet, (unsigned char *)targ->frame, header->caplen);
-        targ->g->pkt_size = header->caplen;
-        pcap_close(file);
-        return;
-    }
-#endif
+    uint16_t i = 0;
+    uint8_t sum = 0;
 
     paylen = targ->g->pkt_size - sizeof(*eh) -
         (targ->g->af == AF_INET ? sizeof(ip): sizeof(ip6));
 
-    /* create a nice NUL-terminated string */
-    for (i = 0; i < paylen; i += l0) {
-        if (l0 > paylen - i)
-            l0 = paylen - i; // last round
-        bcopy(payload, PKT(pkt, body, targ->g->af) + i, l0);
+    // Build payload, filling it with growing bytes and
+    // writing the checksum in the last digit
+    uint8_t *pp = (uint8_t *)PKT(pkt, body, targ->g->af);
+    for (i = 0; i < paylen-sizeof(struct udphdr)-1; i++) {
+        pp[i] = (uint8_t)i;
+        sum += (uint8_t)i;
     }
-    PKT(pkt, body, targ->g->af)[i - 1] = '\0';
+    pp[paylen-sizeof(struct udphdr)-1] = (uint8_t)(~sum + 1);
 
     /* prepare the headers */
     eh = &pkt->eh;
@@ -1598,126 +1547,95 @@ sender_body(void *data)
         wait_time(targ->tic);
         nexttime = targ->tic;
     }
-    if (targ->g->dev_type == DEV_TAP) {
-        D("writing to file desc %d", targ->g->main_fd);
 
-        for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
-            if (write(targ->g->main_fd, frame, size) != -1)
-                sent++;
-            update_addresses(pkt, targ);
-            if (i > 10000) {
-                targ->ctr.pkts = sent;
-                targ->ctr.bytes = sent*size;
-                targ->ctr.events = sent;
-                i = 0;
-            }
+    int tosend = 0;
+    u_int bufsz, frag_size = targ->g->frag_size;
+
+    nifp = targ->nmd->nifp;
+    txring = NETMAP_TXRING(nifp, targ->nmd->first_tx_ring);
+    bufsz = txring->nr_buf_size;
+    if (bufsz < frag_size)
+        frag_size = bufsz;
+    targ->frag_size = targ->g->pkt_size / targ->frags;
+    if (targ->frag_size > frag_size) {
+        targ->frags = targ->g->pkt_size / frag_size;
+        targ->frag_size = frag_size;
+        if (targ->g->pkt_size % frag_size != 0)
+            targ->frags++;
+    }
+    D("frags %u frag_size %u", targ->frags, targ->frag_size);
+    while (!targ->cancel && (n == 0 || sent < n)) {
+        int rv;
+
+        if (rate_limit && tosend <= 0) {
+            tosend = targ->g->burst;
+            nexttime = timespec_add(nexttime, targ->g->tx_period);
+            wait_time(nexttime);
         }
-#ifndef NO_PCAP
-    } else if (targ->g->dev_type == DEV_PCAP) {
-        pcap_t *p = targ->g->p;
 
-        for (i = 0; !targ->cancel && (n == 0 || sent < n); i++) {
-            if (pcap_inject(p, frame, size) != -1)
-                sent++;
-            update_addresses(pkt, targ);
-            if (i > 10000) {
-                targ->ctr.pkts = sent;
-                targ->ctr.bytes = sent*size;
-                targ->ctr.events = sent;
-                i = 0;
-            }
-        }
-#endif /* NO_PCAP */
-    } else {
-        int tosend = 0;
-        u_int bufsz, frag_size = targ->g->frag_size;
-
-        nifp = targ->nmd->nifp;
-        txring = NETMAP_TXRING(nifp, targ->nmd->first_tx_ring);
-        bufsz = txring->nr_buf_size;
-        if (bufsz < frag_size)
-            frag_size = bufsz;
-        targ->frag_size = targ->g->pkt_size / targ->frags;
-        if (targ->frag_size > frag_size) {
-            targ->frags = targ->g->pkt_size / frag_size;
-            targ->frag_size = frag_size;
-            if (targ->g->pkt_size % frag_size != 0)
-                targ->frags++;
-        }
-        D("frags %u frag_size %u", targ->frags, targ->frag_size);
-        while (!targ->cancel && (n == 0 || sent < n)) {
-            int rv;
-
-            if (rate_limit && tosend <= 0) {
-                tosend = targ->g->burst;
-                nexttime = timespec_add(nexttime, targ->g->tx_period);
-                wait_time(nexttime);
-            }
-
-            /*
-             * wait for available room in the send queue(s)
-             */
+        /*
+         * wait for available room in the send queue(s)
+         */
 #ifdef BUSYWAIT
-            (void)rv;
-            if (ioctl(pfd.fd, NIOCTXSYNC, NULL) < 0) {
-                D("ioctl error on queue %d: %s", targ->me,
-                        strerror(errno));
-                goto quit;
-            }
+        (void)rv;
+        if (ioctl(pfd.fd, NIOCTXSYNC, NULL) < 0) {
+            D("ioctl error on queue %d: %s", targ->me,
+                    strerror(errno));
+            goto quit;
+        }
 #else /* !BUSYWAIT */
-            if ( (rv = poll(&pfd, 1, 2000)) <= 0) {
-                if (targ->cancel)
-                    break;
-                D("poll error on queue %d: %s", targ->me,
-                        rv ? strerror(errno) : "timeout");
-                // goto quit;
-            }
-            if (pfd.revents & POLLERR) {
-                D("poll error on %d ring %d-%d", pfd.fd,
-                        targ->nmd->first_tx_ring, targ->nmd->last_tx_ring);
-                goto quit;
-            }
+        if ( (rv = poll(&pfd, 1, 2000)) <= 0) {
+            if (targ->cancel)
+                break;
+            D("poll error on queue %d: %s", targ->me,
+                    rv ? strerror(errno) : "timeout");
+            // goto quit;
+        }
+        if (pfd.revents & POLLERR) {
+            D("poll error on %d ring %d-%d", pfd.fd,
+                    targ->nmd->first_tx_ring, targ->nmd->last_tx_ring);
+            goto quit;
+        }
 #endif /* !BUSYWAIT */
-            /*
-             * scan our queues and send on those with room
-             */
-            if (options & OPT_COPY && sent > 100000 && !(targ->g->options & OPT_COPY) ) {
-                D("drop copy");
-                options &= ~OPT_COPY;
+        /*
+         * scan our queues and send on those with room
+         */
+        if (options & OPT_COPY && sent > 100000 && !(targ->g->options & OPT_COPY) ) {
+            D("drop copy");
+            options &= ~OPT_COPY;
+        }
+        for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
+            int m;
+            uint64_t limit = rate_limit ?  tosend : targ->g->burst;
+
+            if (n > 0 && n == sent)
+                break;
+
+            if (n > 0 && n - sent < limit)
+                limit = n - sent;
+            txring = NETMAP_TXRING(nifp, i);
+            if (nm_ring_empty(txring))
+                continue;
+
+            if (targ->g->pkt_min_size > 0) {
+                size = nrand48(targ->seed) %
+                    (targ->g->pkt_size - targ->g->pkt_min_size) +
+                    targ->g->pkt_min_size;
             }
-            for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
-                int m;
-                uint64_t limit = rate_limit ?  tosend : targ->g->burst;
-
-                if (n > 0 && n == sent)
+            m = send_packets(txring, pkt, frame, size, targ,
+                    limit, options);
+            ND("limit %lu tail %d m %d",
+                    limit, txring->tail, m);
+            sent += m;
+            if (m > 0) //XXX-ste: can m be 0?
+                event++;
+            targ->ctr.pkts = sent;
+            targ->ctr.bytes += m*size;
+            targ->ctr.events = event;
+            if (rate_limit) {
+                tosend -= m;
+                if (tosend <= 0)
                     break;
-
-                if (n > 0 && n - sent < limit)
-                    limit = n - sent;
-                txring = NETMAP_TXRING(nifp, i);
-                if (nm_ring_empty(txring))
-                    continue;
-
-                if (targ->g->pkt_min_size > 0) {
-                    size = nrand48(targ->seed) %
-                        (targ->g->pkt_size - targ->g->pkt_min_size) +
-                        targ->g->pkt_min_size;
-                }
-                m = send_packets(txring, pkt, frame, size, targ,
-                        limit, options);
-                ND("limit %lu tail %d m %d",
-                        limit, txring->tail, m);
-                sent += m;
-                if (m > 0) //XXX-ste: can m be 0?
-                    event++;
-                targ->ctr.pkts = sent;
-                targ->ctr.bytes += m*size;
-                targ->ctr.events = event;
-                if (rate_limit) {
-                    tosend -= m;
-                    if (tosend <= 0)
-                        break;
-                }
             }
         }
         /* flush any remaining packets */
@@ -1753,21 +1671,36 @@ quit:
 }
 
 
-#ifndef NO_PCAP
-    static void
-receive_pcap(u_char *user, const struct pcap_pkthdr * h,
-        const u_char * bytes)
+static inline uint8_t verify_checksum(uint8_t *data, size_t len)
 {
-    struct my_ctrs *ctr = (struct my_ctrs *)user;
-    (void)bytes;	/* UNUSED */
-    ctr->bytes += h->len;
-    ctr->pkts++;
+    if (len == 0)
+        return 0;
+
+    uint8_t sum = 0;
+
+    // Sum all bytes except the last
+    for (size_t i = 0; i < len-1; ++i)
+    {
+        sum += data[i];
+    }
+
+    // The last byte contains the checksum
+    // Return 1 if OK, 0 if bad
+    return (uint8_t)(~sum + 1) == data[len-1];
 }
-#endif /* !NO_PCAP */
 
+static inline void consume_payload(uint8_t *data, size_t len)
+{
+    uint16_t paylen = len - sizeof(struct ether_header) - sizeof(struct ip) - sizeof(struct udphdr);
 
-    static int
-receive_packets(struct netmap_ring *ring, u_int limit, int dump, uint64_t *bytes)
+    uint8_t valid = verify_checksum(data+len-paylen, paylen);
+
+    if (valid == 0) {
+        fprintf(stderr, "ERROR: received message checksum is not correct!\n");
+    }
+}
+
+static int receive_packets(struct netmap_ring *ring, u_int limit, int dump, int consume, uint64_t *bytes)
 {
     u_int head, rx, n;
     uint64_t b = 0;
@@ -1784,12 +1717,11 @@ receive_packets(struct netmap_ring *ring, u_int limit, int dump, uint64_t *bytes
         struct netmap_slot *slot = &ring->slot[head];
         char *p = NETMAP_BUF(ring, slot->buf_idx);
 
-        /* Consume */
-        // consume_data(slot->len, (void *)p);  // TODO
-
         *bytes += slot->len;
         if (dump)
             dump_payload(p, slot->len, ring, head);
+        if (consume)
+            consume_payload((uint8_t *)p, slot->len);
         if (!(slot->flags & NS_MOREFRAG))
             complete++;
 
@@ -1835,74 +1767,54 @@ receiver_body(void *data)
     }
     /* main loop, exit after 1s silence */
     clock_gettime(CLOCK_REALTIME_PRECISE, &targ->tic);
-    if (targ->g->dev_type == DEV_TAP) {
-        while (!targ->cancel) {
-            char buf[MAX_BODYSIZE];
-            /* XXX should we poll ? */
-            i = read(targ->g->main_fd, buf, sizeof(buf));
-            if (i > 0) {
-                targ->ctr.pkts++;
-                targ->ctr.bytes += i;
-                targ->ctr.events++;
-            }
-        }
-#ifndef NO_PCAP
-    } else if (targ->g->dev_type == DEV_PCAP) {
-        while (!targ->cancel) {
-            /* XXX should we poll ? */
-            pcap_dispatch(targ->g->p, targ->g->burst, receive_pcap,
-                    (u_char *)&targ->ctr);
-            targ->ctr.events++;
-        }
-#endif /* !NO_PCAP */
-    } else {
-        int dump = targ->g->options & OPT_DUMP;
 
-        nifp = targ->nmd->nifp;
-        while (!targ->cancel) {
-            /* Once we started to receive packets, wait at most 1 seconds
-               before quitting. */
+    int dump = targ->g->options & OPT_DUMP;
+    int consume = targ->g->options & OPT_CONSUME;
+
+    nifp = targ->nmd->nifp;
+    while (!targ->cancel) {
+        /* Once we started to receive packets, wait at most 1 seconds
+           before quitting. */
 #ifdef BUSYWAIT
-            if (ioctl(pfd.fd, NIOCRXSYNC, NULL) < 0) {
-                D("ioctl error on queue %d: %s", targ->me,
-                        strerror(errno));
-                goto quit;
-            }
-#else /* !BUSYWAIT */
-            if (poll(&pfd, 1, 1 * 1000) <= 0 && !targ->g->forever) {
-                clock_gettime(CLOCK_REALTIME_PRECISE, &targ->toc);
-                targ->toc.tv_sec -= 1; /* Subtract timeout time. */
-                goto out;
-            }
-
-            if (pfd.revents & POLLERR) {
-                D("poll err");
-                goto quit;
-            }
-#endif /* !BUSYWAIT */
-            uint64_t cur_space = 0;
-            for (i = targ->nmd->first_rx_ring; i <= targ->nmd->last_rx_ring; i++) {
-                int m;
-
-                rxring = NETMAP_RXRING(nifp, i);
-                /* compute free space in the ring */
-                m = rxring->head + rxring->num_slots - rxring->tail;
-                if (m >= (int) rxring->num_slots)
-                    m -= rxring->num_slots;
-                cur_space += m;
-                if (nm_ring_empty(rxring))
-                    continue;
-
-                m = receive_packets(rxring, targ->g->burst, dump, &cur.bytes);
-                cur.pkts += m;
-                if (m > 0)
-                    cur.events++;
-            }
-            cur.min_space = targ->ctr.min_space;
-            if (cur_space < cur.min_space)
-                cur.min_space = cur_space;
-            targ->ctr = cur;
+        if (ioctl(pfd.fd, NIOCRXSYNC, NULL) < 0) {
+            D("ioctl error on queue %d: %s", targ->me,
+                    strerror(errno));
+            goto quit;
         }
+#else /* !BUSYWAIT */
+        if (poll(&pfd, 1, 1 * 1000) <= 0 && !targ->g->forever) {
+            clock_gettime(CLOCK_REALTIME_PRECISE, &targ->toc);
+            targ->toc.tv_sec -= 1; /* Subtract timeout time. */
+            goto out;
+        }
+
+        if (pfd.revents & POLLERR) {
+            D("poll err");
+            goto quit;
+        }
+#endif /* !BUSYWAIT */
+        uint64_t cur_space = 0;
+        for (i = targ->nmd->first_rx_ring; i <= targ->nmd->last_rx_ring; i++) {
+            int m;
+
+            rxring = NETMAP_RXRING(nifp, i);
+            /* compute free space in the ring */
+            m = rxring->head + rxring->num_slots - rxring->tail;
+            if (m >= (int) rxring->num_slots)
+                m -= rxring->num_slots;
+            cur_space += m;
+            if (nm_ring_empty(rxring))
+                continue;
+
+            m = receive_packets(rxring, targ->g->burst, dump, consume, &cur.bytes);
+            cur.pkts += m;
+            if (m > 0)
+                cur.events++;
+        }
+        cur.min_space = targ->ctr.min_space;
+        if (cur_space < cur.min_space)
+            cur.min_space = cur_space;
+        targ->ctr = cur;
     }
 
     clock_gettime(CLOCK_REALTIME_PRECISE, &targ->toc);
@@ -2431,10 +2343,6 @@ usage(int errcode)
             "     -H len  Add empty virtio-net-header with size 'len'.  Valid sizes are 0, 10 and 12.  This option is\n"
             "             only used with Virtual Machine technologies that use virtio as a network interface.\n"
             "\n"
-            "     -P file\n"
-            "             Load the packet to be transmitted from a pcap file rather than constructing it within\n"
-            "             pkt-gen.\n"
-            "\n"
             "     -z      Use random IPv4/IPv6 src address/port.\n"
             "\n"
             "     -Z      Use random IPv4/IPv6 dst address/port.\n"
@@ -2567,7 +2475,9 @@ start_threads(struct glob_arg *g) {
             t->affinity = -1;
         }
         /* default, init packets */
-        initialize_packet(t);
+        if (g->td_type != TD_TYPE_RECEIVER) {
+            initialize_packet(t);
+        }
     }
     /* Wait for PHY reset. */
     D("Wait %d secs for phy reset", g->wait_link);
@@ -2735,72 +2645,6 @@ static struct td_desc func[] = {
     { 0,			NULL,		NULL, 		0 }
 };
 
-    static int
-tap_alloc(char *dev)
-{
-    struct ifreq ifr;
-    int fd, err;
-    char *clonedev = TAP_CLONEDEV;
-
-    (void)err;
-    (void)dev;
-    /* Arguments taken by the function:
-     *
-     * char *dev: the name of an interface (or '\0'). MUST have enough
-     *   space to hold the interface name if '\0' is passed
-     * int flags: interface flags (eg, IFF_TUN etc.)
-     */
-
-#ifdef __FreeBSD__
-    if (dev[3]) { /* tapSomething */
-        static char buf[128];
-        snprintf(buf, sizeof(buf), "/dev/%s", dev);
-        clonedev = buf;
-    }
-#endif
-    /* open the device */
-    if( (fd = open(clonedev, O_RDWR)) < 0 ) {
-        return fd;
-    }
-    D("%s open successful", clonedev);
-
-    /* preparation of the struct ifr, of type "struct ifreq" */
-    memset(&ifr, 0, sizeof(ifr));
-
-#ifdef linux
-    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
-
-    if (*dev) {
-        /* if a device name was specified, put it in the structure; otherwise,
-         * the kernel will try to allocate the "next" device of the
-         * specified type */
-        size_t len = strlen(dev);
-        if (len > IFNAMSIZ) {
-            D("%s too long", dev);
-            return -1;
-        }
-        memcpy(ifr.ifr_name, dev, len);
-    }
-
-    /* try to create the device */
-    if( (err = ioctl(fd, TUNSETIFF, (void *) &ifr)) < 0 ) {
-        D("failed to to a TUNSETIFF: %s", strerror(errno));
-        close(fd);
-        return err;
-    }
-
-    /* if the operation was successful, write back the name of the
-     * interface to the variable "dev", so the caller can know
-     * it. Note that the caller MUST reserve space in *dev (see calling
-     * code below) */
-    strcpy(dev, ifr.ifr_name);
-    D("new name is %s", dev);
-#endif /* linux */
-
-    /* this is the special file descriptor that the caller will use to talk
-     * with the virtual interface */
-    return fd;
-}
 
 int netmap_main_loop(int arc, char **argv)
 {
@@ -2845,7 +2689,7 @@ int netmap_main_loop(int arc, char **argv)
 
     optind = 1;
     while ((ch = getopt(arc, argv, "46a:f:F:Nn:i:Il:d:s:D:S:b:c:o:p:"
-                    "T:w:WvR:XC:H:rP:zZAhBM:")) != -1) {
+                    "T:w:WvR:XeC:H:rP:zZAhBM:")) != -1) {
 
         switch(ch) {
             default:
@@ -2908,7 +2752,7 @@ int netmap_main_loop(int arc, char **argv)
                 break;
 
             case 'i':	/* interface */
-                /* a prefix of tap: netmap: or pcap: forces the mode.
+                /* a prefix of netmap: forces the mode.
                  * otherwise we guess
                  */
                 D("interface is %s", optarg);
@@ -2920,17 +2764,9 @@ int netmap_main_loop(int arc, char **argv)
                 if (!strcmp(optarg, "null")) {
                     g.dev_type = DEV_NETMAP;
                     g.dummy_send = 1;
-                } else if (!strncmp(optarg, "tap:", 4)) {
-                    g.dev_type = DEV_TAP;
-                    strcpy(g.ifname, optarg + 4);
-                } else if (!strncmp(optarg, "pcap:", 5)) {
-                    g.dev_type = DEV_PCAP;
-                    strcpy(g.ifname, optarg + 5);
                 } else if (!strncmp(optarg, "netmap:", 7) ||
                         !strncmp(optarg, "vale", 4)) {
                     g.dev_type = DEV_NETMAP;
-                } else if (!strncmp(optarg, "tap", 3)) {
-                    g.dev_type = DEV_TAP;
                 } else { /* prepend netmap: */
                     g.dev_type = DEV_NETMAP;
                     sprintf(g.ifname, "netmap:%s", optarg);
@@ -2996,6 +2832,9 @@ int netmap_main_loop(int arc, char **argv)
                 break;
             case 'X':
                 g.options |= OPT_DUMP;
+                break;
+            case 'e':
+                g.options |= OPT_CONSUME;
                 break;
             case 'C':
                 D("WARNING: the 'C' option is deprecated, use the '+conf:' libnetmap option instead");
@@ -3081,27 +2920,7 @@ int netmap_main_loop(int arc, char **argv)
         usage(-1);
     }
 
-    if (g.dev_type == DEV_TAP) {
-        D("want to use tap %s", g.ifname);
-        g.main_fd = tap_alloc(g.ifname);
-        if (g.main_fd < 0) {
-            D("cannot open tap %s", g.ifname);
-            usage(-1);
-        }
-#ifndef NO_PCAP
-    } else if (g.dev_type == DEV_PCAP) {
-        char pcap_errbuf[PCAP_ERRBUF_SIZE];
-
-        pcap_errbuf[0] = '\0'; // init the buffer
-        g.p = pcap_open_live(g.ifname, 256 /* XXX */, 1, 100, pcap_errbuf);
-        if (g.p == NULL) {
-            D("cannot open pcap on %s", g.ifname);
-            usage(-1);
-        }
-        g.main_fd = pcap_fileno(g.p);
-        D("using pcap on %s fileno %d", g.ifname, g.main_fd);
-#endif /* !NO_PCAP */
-    } else if (g.dummy_send) { /* but DEV_NETMAP */
+    if (g.dummy_send) { /* but DEV_NETMAP */
         D("using a dummy send routine");
     } else {
         g.nmd = nmport_prepare(g.ifname);
