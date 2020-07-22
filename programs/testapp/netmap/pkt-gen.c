@@ -55,79 +55,22 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <netinet/ip6.h>
+#include <net/if.h>
+#include <net/if_arp.h>
 #ifdef linux
 #define IPV6_VERSION	0x60
 #define IPV6_DEFHLIM	64
 #endif
 #include <assert.h>
+#include <errno.h>
 #include <math.h>
-
 #include <pthread.h>
+#include <string.h>
 
 #include "ctrs.h"
 #include "pkt-gen.h"
 
 static void usage(int);
-
-#ifdef _WIN32
-#define cpuset_t        DWORD_PTR   //uint64_t
-static inline void CPU_ZERO(cpuset_t *p)
-{
-    *p = 0;
-}
-
-static inline void CPU_SET(uint32_t i, cpuset_t *p)
-{
-    *p |= 1<< (i & 0x3f);
-}
-
-#define pthread_setaffinity_np(a, b, c) !SetThreadAffinityMask(a, *c)    //((void)a, 0)
-#define AF_LINK	18	//defined in winsocks.h
-#define CLOCK_REALTIME_PRECISE CLOCK_REALTIME
-#include <net/if_dl.h>
-
-/*
- * Convert an ASCII representation of an ethernet address to
- * binary form.
- */
-    struct ether_addr *
-ether_aton(const char *a)
-{
-    int i;
-    static struct ether_addr o;
-    unsigned int o0, o1, o2, o3, o4, o5;
-
-    i = sscanf(a, "%x:%x:%x:%x:%x:%x", &o0, &o1, &o2, &o3, &o4, &o5);
-
-    if (i != 6)
-        return (NULL);
-
-    o.octet[0]=o0;
-    o.octet[1]=o1;
-    o.octet[2]=o2;
-    o.octet[3]=o3;
-    o.octet[4]=o4;
-    o.octet[5]=o5;
-
-    return ((struct ether_addr *)&o);
-}
-
-/*
- * Convert a binary representation of an ethernet address to
- * an ASCII string.
- */
-    char *
-ether_ntoa(const struct ether_addr *n)
-{
-    int i;
-    static char a[18];
-
-    i = sprintf(a, "%02x:%02x:%02x:%02x:%02x:%02x",
-            n->octet[0], n->octet[1], n->octet[2],
-            n->octet[3], n->octet[4], n->octet[5]);
-    return (i < 17 ? NULL : (char *)&a);
-}
-#endif /* _WIN32 */
 
 #ifdef linux
 
@@ -142,37 +85,6 @@ ether_ntoa(const struct ether_addr *n)
 #include <netinet/ether.h>      /* ether_aton */
 #include <linux/if_packet.h>    /* sockaddr_ll */
 #endif  /* linux */
-
-#ifdef __FreeBSD__
-#include <sys/endian.h> /* le64toh */
-#include <machine/param.h>
-
-#include <pthread_np.h> /* pthread w/ affinity */
-#include <sys/cpuset.h> /* cpu_set */
-#include <net/if_dl.h>  /* LLADDR */
-#endif  /* __FreeBSD__ */
-
-#ifdef __APPLE__
-
-#define cpuset_t        uint64_t        // XXX
-static inline void CPU_ZERO(cpuset_t *p)
-{
-    *p = 0;
-}
-
-static inline void CPU_SET(uint32_t i, cpuset_t *p)
-{
-    *p |= 1<< (i & 0x3f);
-}
-
-#define pthread_setaffinity_np(a, b, c) ((void)a, 0)
-
-#define ifr_flagshigh  ifr_flags        // XXX
-#define IFF_PPROMISC   IFF_PROMISC
-#include <net/if_dl.h>  /* LLADDR */
-#define clock_gettime(a,b)      \
-    do {struct timespec t0 = {0,0}; *(b) = t0; } while (0)
-#endif  /* __APPLE__ */
 
 int verbose = 0;
 int normalize = 1;
@@ -337,6 +249,43 @@ cksum_add(uint16_t sum, uint16_t a)
 
     res = sum + a;
     return (res + (res < a));
+}
+
+
+void get_mac(char *iface_name)
+{
+    struct ifreq ifr;
+    size_t iface_name_len = strlen(iface_name);
+
+    if (iface_name_len < sizeof(ifr.ifr_name)) {
+        memcpy(ifr.ifr_name, iface_name, iface_name_len);
+        ifr.ifr_name[iface_name_len] = 0;
+    } else {
+        fprintf(stderr, "ERROR: interface name is too long\n");
+        exit(-1);
+    }
+
+    int fd = socket(AF_UNIX,SOCK_DGRAM, 0);
+    if (fd == -1) {
+        fprintf(stderr, "ERROR: can't create socket for iface config retrieval\n");
+        exit(-1);
+    }
+
+    if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1) {
+        close(fd);
+        fprintf(stderr, "ERROR: can't ioctl to retrieve the MAC address\n");
+        exit(-1);
+    }
+    close(fd);
+
+    if (ifr.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
+        fprintf(stderr, "ERROR: interface is not ethernet\n");
+        exit(-1);
+    }
+
+    const unsigned char* mac=(unsigned char*)ifr.ifr_hwaddr.sa_data;
+    printf("[DEBUG] This is my MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
 }
 
     static void
@@ -565,18 +514,8 @@ sigint_h(int sig)
 system_ncpus(void)
 {
     int ncpus;
-#if defined (__FreeBSD__)
-    int mib[2] = { CTL_HW, HW_NCPU };
-    size_t len = sizeof(mib);
-    sysctl(mib, 2, &ncpus, &len, NULL, 0);
-#elif defined(linux)
+#if defined(linux)
     ncpus = sysconf(_SC_NPROCESSORS_ONLN);
-#elif defined(_WIN32)
-    {
-        SYSTEM_INFO sysinfo;
-        GetSystemInfo(&sysinfo);
-        ncpus = sysinfo.dwNumberOfProcessors;
-    }
 #else /* others */
     ncpus = 1;
 #endif /* others */
@@ -981,6 +920,7 @@ initialize_packet(struct targ *targ)
     uint32_t csum = 0;
     uint16_t i = 0;
     uint8_t sum = 0;
+    get_mac("veth_0_guest");    // TODO experimental
 
     paylen = targ->g->pkt_size - sizeof(*eh) -
         (targ->g->af == AF_INET ? sizeof(ip): sizeof(ip6));
