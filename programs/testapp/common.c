@@ -69,6 +69,8 @@ const char usage_format_string[] =
     "\t\t\tThe argument is the name of the interface to use.\n"
     "\t\t\tValid only for sockets-based programs, not DPDK ones.\n"
     "\n"
+    "    -i <interf_name>\tSpecify the local interface to use (for netmap).\n"
+    "\n"
     "    -B\t\t\tUse blocking sockets instead of nonblocking ones.\n"
     "\t\t\tValid only for sockets-based programs, not DPDK ones.\n"
     "\n"
@@ -109,7 +111,7 @@ static inline int options_parse(int argc, char *argv[], struct config *conf, int
     int opt;
     optind = argind;
 
-    while ((opt = getopt(argc, argv, "+r:p:b:R:cmsB")) != -1)
+    while ((opt = getopt(argc, argv, "+r:p:b:R:i:cmsB")) != -1)
     {
         switch (opt)
         {
@@ -125,7 +127,10 @@ static inline int options_parse(int argc, char *argv[], struct config *conf, int
         case 'R':
             // NOTICE: option is ignored by DPDK-based programs
             conf->socktype = SOCK_RAW;
-            strncpy(conf->local_interf, optarg, sizeof(conf->local_interf - 1));
+            strncpy(conf->local_interf, optarg, strlen(optarg));
+            break;
+        case 'i':
+            strncpy(conf->local_interf, optarg, strlen(optarg));
             break;
         case 'B':
             conf->use_block = true;

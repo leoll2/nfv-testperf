@@ -551,7 +551,7 @@ function start_vswitch() {
         for i in "${!LXC_CONT_NAMES[@]}" ; do
             # Create a veth (two endpoints)
             endpoint_host_name=veth_${i}_host
-            endpoint_guest_name=veth_${i}_guest
+            endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
             sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
 
             # Connect one endpoint to vale switch
@@ -686,13 +686,19 @@ function consume_data_option() {
     fi
 }
 
+function netmap_iface_option() {
+    if [ "$vswitch" == vale ] ; then
+        printf "%s %s\n" "-i" "${LXC_CONT_NETMAP_LOCAL_IF[${1}]}"
+    fi
+}
+
 # TODO: other options
 # TODO: raw socket option somehow
 # NOTICE: -m option forces programs that support mmsg api to use it
 # NOTICE: -s option enables silent mode for any application
 function fill_commands() {
     for i in "${!LXC_CONT_NAMES[@]}"; do
-        COMMANDS[$i]="/test.sh -m ${LXC_CONT_NAMES[i]} `vswitch_cmdline_option` ${LXC_CONT_CMDNAMES[i]} -- ${LXC_CONT_IPS[i]} ${LXC_CONT_MACS[i]} ${LXC_CONT_OTHER_IPS[i]} ${LXC_CONT_OTHER_MACS[i]} `silent_mode_opt` `raw_mode_opt` `noblock_mode_opt` `multi_msg_opt` -r $rate -b $bst_size -p $pkt_size `consume_data_option`"
+        COMMANDS[$i]="/test.sh -m ${LXC_CONT_NAMES[i]} `vswitch_cmdline_option` ${LXC_CONT_CMDNAMES[i]} -- ${LXC_CONT_IPS[i]} ${LXC_CONT_MACS[i]} ${LXC_CONT_OTHER_IPS[i]} ${LXC_CONT_OTHER_MACS[i]} `silent_mode_opt` `raw_mode_opt` `noblock_mode_opt` `multi_msg_opt` -r $rate -b $bst_size -p $pkt_size `netmap_iface_option $i` `consume_data_option`"
     done
 }
 
@@ -768,7 +774,7 @@ function move_veth_to_container() {
     # It assumes that the container is already running
     i=$1
     cont_pid=$(sudo lxc-info -pHn ${LXC_CONT_NAMES[i]})
-    endpoint_guest_name=veth_${i}_guest
+    endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
     sudo ip link set dev ${endpoint_guest_name} netns ${cont_pid} name ${endpoint_guest_name}
     # Enable the interface (it goes DOWN after moving it)
     sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ip link set ${endpoint_guest_name} up

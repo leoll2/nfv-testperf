@@ -101,7 +101,7 @@ struct config
     struct sock_addr_pair local_addr;
     struct sock_addr_pair remote_addr;
 
-    char local_interf[16];
+    char local_interf[32];
 
     macaddr_str local_mac;
     macaddr_str remote_mac;
