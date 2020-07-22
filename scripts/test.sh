@@ -165,6 +165,6 @@ fi
 #echo "COMMAND: taskset ${cpumask} /testapp ${command} ${command_args} -- ${dpdk_args}"
 
 set -x
-taskset ${cpumask} /testapp ${command} ${command_args} -- ${dpdk_args}
+nice -n -20 taskset ${cpumask} /testapp ${command} ${command_args} -- ${dpdk_args}
 
 exit 0

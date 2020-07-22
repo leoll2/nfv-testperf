@@ -177,7 +177,7 @@ struct glob_arg {
 #define OPT_TS		16	/* add a timestamp */
 #define OPT_INDIRECT	32	/* use indirect buffers, tx only */
 #define OPT_DUMP	64	/* dump rx/tx traffic */
-#define OPT_CONSUME	128 	/* consume rx traffic */
+#define OPT_CONSUME	128	/* consume rx traffic */
 #define OPT_RUBBISH	256	/* send wathever the buffers contain */
 #define OPT_RANDOM_SRC  512
 #define OPT_RANDOM_DST  1024
@@ -206,7 +206,7 @@ struct glob_arg {
     int wait_link;
     int framing;		/* #bits of framing (for bw output) */
 };
-enum dev_type { DEV_NONE, DEV_NETMAP};
+enum dev_type { DEV_NONE, DEV_NETMAP };
 
 enum {
     TD_TYPE_SENDER = 1,
@@ -250,7 +250,6 @@ cksum_add(uint16_t sum, uint16_t a)
     res = sum + a;
     return (res + (res < a));
 }
-
 
 void get_mac(char *iface_name)
 {
@@ -920,7 +919,7 @@ initialize_packet(struct targ *targ)
     uint32_t csum = 0;
     uint16_t i = 0;
     uint8_t sum = 0;
-    get_mac("veth_0_guest");    // TODO experimental
+    //get_mac("veth_0_guest");    // TODO experimental
 
     paylen = targ->g->pkt_size - sizeof(*eh) -
         (targ->g->af == AF_INET ? sizeof(ip): sizeof(ip6));
@@ -1578,25 +1577,26 @@ sender_body(void *data)
                     break;
             }
         }
-        /* flush any remaining packets */
-        if (txring != NULL) {
-            D("flush tail %d head %d on thread %p",
-                    txring->tail, txring->head,
-                    (void *)pthread_self());
-            ioctl(pfd.fd, NIOCTXSYNC, NULL);
-        }
+    }
+    /* flush any remaining packets */
+    if (txring != NULL) {
+        D("flush tail %d head %d on thread %p",
+                txring->tail, txring->head,
+                (void *)pthread_self());
+        ioctl(pfd.fd, NIOCTXSYNC, NULL);
+    }
 
-        /* final part: wait all the TX queues to be empty. */
-        for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
-            txring = NETMAP_TXRING(nifp, i);
-            while (!targ->cancel && nm_tx_pending(txring)) {
-                RD(5, "pending tx tail %d head %d on ring %d",
-                        txring->tail, txring->head, i);
-                ioctl(pfd.fd, NIOCTXSYNC, NULL);
-                usleep(1); /* wait 1 tick */
-            }
+    /* final part: wait all the TX queues to be empty. */
+    for (i = targ->nmd->first_tx_ring; i <= targ->nmd->last_tx_ring; i++) {
+        txring = NETMAP_TXRING(nifp, i);
+        while (!targ->cancel && nm_tx_pending(txring)) {
+            RD(5, "pending tx tail %d head %d on ring %d",
+                    txring->tail, txring->head, i);
+            ioctl(pfd.fd, NIOCTXSYNC, NULL);
+            usleep(1); /* wait 1 tick */
         }
-    } /* end DEV_NETMAP */
+    }
+
 
     clock_gettime(CLOCK_REALTIME_PRECISE, &targ->toc);
     targ->completed = 1;
@@ -1609,7 +1609,6 @@ quit:
 
     return (NULL);
 }
-
 
 static inline uint8_t verify_checksum(uint8_t *data, size_t len)
 {
@@ -1707,7 +1706,6 @@ receiver_body(void *data)
     }
     /* main loop, exit after 1s silence */
     clock_gettime(CLOCK_REALTIME_PRECISE, &targ->tic);
-
     int dump = targ->g->options & OPT_DUMP;
     int consume = targ->g->options & OPT_CONSUME;
 
@@ -2585,7 +2583,6 @@ static struct td_desc func[] = {
     { 0,			NULL,		NULL, 		0 }
 };
 
-
 int netmap_main_loop(int arc, char **argv)
 {
     int i;
@@ -2860,7 +2857,7 @@ int netmap_main_loop(int arc, char **argv)
         usage(-1);
     }
 
-    if (g.dummy_send) { /* but DEV_NETMAP */
+    if (g.dummy_send) {
         D("using a dummy send routine");
     } else {
         g.nmd = nmport_prepare(g.ifname);
