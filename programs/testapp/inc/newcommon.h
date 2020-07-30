@@ -132,6 +132,8 @@ extern struct stats *stats_ptr; // FIXME: why is this variable here
 
 extern int addr_mac_set(struct sockaddr_ll *addr, const char *mac, const char *ifname);
 
+extern void get_mac_from_iface(char *iface_name, char *outbuf);
+
 extern int parameters_parse(int argc, char *argv[], struct config *conf);
 extern void print_config(struct config *conf);
 

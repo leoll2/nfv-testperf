@@ -24,6 +24,7 @@ int netmap_send_body(int argc, char *argv[])
     int netmap_argc = 1;
     char **netmap_argv = NULL;
     struct config conf = CONFIG_STRUCT_INITIALIZER;
+    char *iface_name;
 
     // Default configuration for local program  /* TODO is this needed? */
     conf.local_port = SEND_PORT;
@@ -47,14 +48,19 @@ int netmap_send_body(int argc, char *argv[])
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-f";
     netmap_argv[netmap_argc-1] = "tx";
+
+    /* Consider the whole packet size for bps statistics */
+    netmap_argc += 1;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-1] = "-B";
     
     /* Interface */
     netmap_argc += 2;
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-i";
-    //netmap_argv[netmap_argc-1] = "netmap:veth_0_guest";
-    netmap_argv[netmap_argc-1] = malloc(32 * sizeof(char));   // 32 digits should be enough
-    snprintf(netmap_argv[netmap_argc-1], 32, "%s", conf.local_interf);
+    netmap_argv[netmap_argc-1] = malloc(32 * sizeof(char)); // 32 chars should be enough
+    snprintf(netmap_argv[netmap_argc-1], 32, "%s", conf.local_interf); // include netmap: prefix
+    iface_name = netmap_argv[netmap_argc-1] + 7;            // exclude netmap: prefix
 
     /* Packet size */
     netmap_argc += 2;
@@ -78,11 +84,27 @@ int netmap_send_body(int argc, char *argv[])
     snprintf(netmap_argv[netmap_argc-1], 16, "%ld", conf.rate);
     
     /* Count */
+    /*
     netmap_argc += 2;
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-n";
     netmap_argv[netmap_argc-1] = malloc(32 * sizeof(char));   // 32 digits should be enough
-    snprintf(netmap_argv[netmap_argc-1], 32, "%ld", conf.rate * 60); // TODO retrieve timeout somewhere from the configuration
+    snprintf(netmap_argv[netmap_argc-1], 32, "%ld", conf.rate * 60); // 60 seconds
+    */
+
+    /* Sender MAC */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-S";
+    netmap_argv[netmap_argc-1] = malloc(18 * sizeof(char));
+    get_mac_from_iface(iface_name, netmap_argv[netmap_argc-1]);
+
+    /* Destination MAC */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-D";
+    netmap_argv[netmap_argc-1] = malloc(18 * sizeof(char));
+    snprintf(netmap_argv[netmap_argc-1], 18, "%s", conf.remote_mac);
 
     /* Last arg must be NULL by convention */
     netmap_argv[netmap_argc] = NULL;

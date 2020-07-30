@@ -55,8 +55,6 @@
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <netinet/ip6.h>
-#include <net/if.h>
-#include <net/if_arp.h>
 #ifdef linux
 #define IPV6_VERSION	0x60
 #define IPV6_DEFHLIM	64
@@ -249,42 +247,6 @@ cksum_add(uint16_t sum, uint16_t a)
 
     res = sum + a;
     return (res + (res < a));
-}
-
-void get_mac(char *iface_name)
-{
-    struct ifreq ifr;
-    size_t iface_name_len = strlen(iface_name);
-
-    if (iface_name_len < sizeof(ifr.ifr_name)) {
-        memcpy(ifr.ifr_name, iface_name, iface_name_len);
-        ifr.ifr_name[iface_name_len] = 0;
-    } else {
-        fprintf(stderr, "ERROR: interface name is too long\n");
-        exit(-1);
-    }
-
-    int fd = socket(AF_UNIX,SOCK_DGRAM, 0);
-    if (fd == -1) {
-        fprintf(stderr, "ERROR: can't create socket for iface config retrieval\n");
-        exit(-1);
-    }
-
-    if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1) {
-        close(fd);
-        fprintf(stderr, "ERROR: can't ioctl to retrieve the MAC address\n");
-        exit(-1);
-    }
-    close(fd);
-
-    if (ifr.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
-        fprintf(stderr, "ERROR: interface is not ethernet\n");
-        exit(-1);
-    }
-
-    const unsigned char* mac=(unsigned char*)ifr.ifr_hwaddr.sa_data;
-    printf("[DEBUG] This is my MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-        mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
 }
 
     static void
@@ -919,7 +881,6 @@ initialize_packet(struct targ *targ)
     uint32_t csum = 0;
     uint16_t i = 0;
     uint8_t sum = 0;
-    //get_mac("veth_0_guest");    // TODO experimental
 
     paylen = targ->g->pkt_size - sizeof(*eh) -
         (targ->g->af == AF_INET ? sizeof(ip): sizeof(ip6));

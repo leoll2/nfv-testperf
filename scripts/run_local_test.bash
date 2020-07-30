@@ -795,6 +795,19 @@ function start_applications() {
 
             # Move one veth endpoint into the container
             move_veth_to_container $i
+
+            if [ "${LXC_CONT_CMDNAMES[i]}" == send ] || [ "${LXC_CONT_CMDNAMES[i]}" == recv ] ; then
+                # Send a few packets to let the switch learn its forwarding table
+                # Otherwise, transmissions would be broadcast.
+                local_veth_mac=$(sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}/address)
+                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 10000 -S ${local_veth_mac} >/dev/null
+
+                if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
+                    # Target interface is the next one (by assumption), and has not been moved to container yet
+                    remote_veth_mac=$(cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i+1]#netmap:}/address)
+                    COMMANDS[$i]="${COMMANDS[i]} -D $remote_veth_mac"
+                fi
+            fi
         fi
 
         # Launch application inside container

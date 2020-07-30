@@ -70,11 +70,15 @@ int netmap_clientst_body(int argc, char *argv[])
     snprintf(netmap_argv[netmap_argc-1], 16, "%d", conf.bst_size);
 
     /* Rate */
-    netmap_argc += 2;
-    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
-    netmap_argv[netmap_argc-2] = "-R";
-    netmap_argv[netmap_argc-1] = malloc(16 * sizeof(char));   // 16 digits should be enough
-    snprintf(netmap_argv[netmap_argc-1], 16, "%ld", conf.rate);
+    if (conf.rate > 0) {
+        netmap_argc += 2;
+        netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+        netmap_argv[netmap_argc-2] = "-R";
+        netmap_argv[netmap_argc-1] = malloc(16 * sizeof(char));   // 16 digits should be enough
+        snprintf(netmap_argv[netmap_argc-1], 16, "%ld", conf.rate);
+    } else {
+        printf("Note: using netmap default sending rate\n");
+    }
     
     /* Count */
     netmap_argc += 2;

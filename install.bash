@@ -201,6 +201,14 @@ rootfs_install() {
     # Copy libnuma library into container filesystem
     cp /usr/lib/x86_64-linux-gnu/libnuma.so.1 $DIR_ROOTFS/lib
 
+    # Copy pkt-gen (netmap) into container filesystem
+    pkt_gen_path=$(whereis -b pkt-gen | head -n 1 | cut -d ' ' -f2)
+    if [ -z "${pkt_gen_path}" ] ; then
+        echo "pkt-gen not found: is it installed?" 1>&2
+        exit
+    fi
+    cp "${pkt_gen_path}" "${DIR_ROOTFS}"
+
     # VERY IMPORTANT: Remove ttyS0 from inittab file, otherwise you get rogue
     # GETTY processes consuming 100% CPU after the container is shut down
     sed -e 's/^ttyS0/#&/g' -i $DIR_ROOTFS/etc/inittab
