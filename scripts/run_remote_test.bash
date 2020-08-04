@@ -12,7 +12,7 @@ confpath="confrc_remote.bash" # -f
 remote_confpath="/tmp/confrc.bash" # leave default
 remote_outdir="/tmp/tmpout" # leave default
 outdir="out/remote" # -o
-cmddir="/home/gara/repo/scripts/" # -C
+cmddir="~/repo/scripts/" # -C
 
 ################################################################################
 #                               MAIN FLOW
