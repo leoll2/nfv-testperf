@@ -27,7 +27,7 @@ struct nm_desc *nmd;        // netmap descriptor, global to close it easily
 static inline void main_loop(struct config *conf) __attribute__((noreturn));
 
 
-void quit_handler(int sig)
+static void quit_handler(int sig)
 {
     nm_close(nmd);
 
@@ -157,7 +157,7 @@ static inline void main_loop(struct config *conf)
             if (conf->bst_size > avail_rx_slots)
                 to_read = avail_rx_slots;
             else
-                to_read = avail_rx_slots;
+                to_read = conf->bst_size;
 
             for (unsigned int si = 0; si < to_read; si++) {
                 struct netmap_slot *slot = &ring->slot[head];
