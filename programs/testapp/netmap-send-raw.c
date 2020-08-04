@@ -101,8 +101,6 @@ static inline void main_loop(struct config *conf)
 
     // ------------------ Infinite loop variables and body ------------------ //
 
-    int pollret;
-
     tsc_cur = tsc_prev = tsc_next = tsc_get_update();
 
     for (;;)
@@ -130,7 +128,6 @@ static inline void main_loop(struct config *conf)
         }
 
         ring = NETMAP_TXRING(nifp, nmd->first_tx_ring);
-        // TODO check fragment size
 
         // If it is already time for the next burst (or in general tsc_next is
         // less than tsc_cur), send the next burst
@@ -138,19 +135,25 @@ static inline void main_loop(struct config *conf)
         {
             tsc_next += tsc_incr;
 
-            pollret = poll(&pfd, 1, 1000);
+#ifdef BUSYWAIT /* Non-blocking API */
+            if (ioctl(pfd.fd, NIOCTXSYNC, NULL) < 0) {
+                fprintf(stderr, "ioctl NIOCTXSYNC failed\n");
+                quit_handler(SIGINT);
+            }
+#else           /* Blocking API */
+            int pollret = poll(&pfd, 1, 1000);
             if (pollret == 0) {
                 fprintf(stderr, "Poll timeout, closing\n");
                 quit_handler(SIGINT);
             } else if (pollret < 0) {
-                fprintf(stderr, "poll() error: %s", strerror(errno));
+                fprintf(stderr, "poll() error: %s\n", strerror(errno));
                 quit_handler(SIGINT);
             }
             if (pfd.revents & POLLERR) {
-                fprintf(stderr, "fd error");
+                fprintf(stderr, "fd error\n");
                 quit_handler(SIGINT);
             }
-
+#endif
             unsigned int bst_left = conf->bst_size;
 
             // For each ring

@@ -130,20 +130,25 @@ static inline void main_loop(struct config *conf)
             // Update timers
             tsc_prev = tsc_cur;
         }
-
+#ifdef BUSYWAIT /* Non-blocking API */
+        if (ioctl(pfd.fd, NIOCRXSYNC, NULL) < 0) {
+            fprintf(stderr, "ioctl NIOCRXSYNC failed\n");
+            quit_handler(SIGINT);
+        }
+#else           /* Blocking API */
         pollret = poll(&pfd, 1, 1000);
         if (pollret == 0) {
             fprintf(stderr, "Poll timeout, closing\n");
             quit_handler(SIGINT);
         } else if (pollret < 0) {
-			fprintf(stderr, "poll() error: %s", strerror(errno));
+			fprintf(stderr, "poll() error: %s\n", strerror(errno));
             quit_handler(SIGINT);
         }
         if (pfd.revents & POLLERR) {
-			fprintf(stderr, "fd error");
+			fprintf(stderr, "fd error\n");
 			quit_handler(SIGINT);
 		}
-
+#endif
         // For each ring, read a batch of packets
 		for (int ri = nmd->first_rx_ring; ri <= nmd->last_rx_ring; ri++) {
             unsigned int head, to_read, avail_rx_slots, b_len;
