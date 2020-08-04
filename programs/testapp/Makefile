@@ -22,7 +22,7 @@ APP		= testapp
 SRCS-y		+= main.c common.c stats.c timestamp.c dpdk.c
 SRCS-y		+= server.c client.c clientst.c send.c recv.c
 SRCS-y		+= dpdk-server.c dpdk-client.c dpdk-clientst.c dpdk-send.c dpdk-recv.c
-SRCS-y		+= netmap-send.c netmap-recv.c netmap-client.c netmap-clientst.c netmap-server.c netmap/pkt-gen.c
+SRCS-y		+= netmap-send-raw.c netmap-recv-raw.c netmap-client.c netmap-clientst.c netmap-server.c netmap/pkt-gen.c
 
 # do I need override on CFLAGS? also, change -O2 to -ggdb -O0 when debug
 CPPFLAGS	+= -iquote $(THIS_DIR)/inc
