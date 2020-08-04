@@ -80,6 +80,7 @@ static inline void main_loop(struct config *conf)
     struct pollfd pfd;
     struct netmap_if *nifp;
     struct netmap_ring *ring;
+    struct netmap_slot *slot = NULL;
     nmd = nm_open(conf->local_interf, NULL, 0, 0);
     pfd.fd = NETMAP_FD(nmd);
     pfd.events = POLLOUT;
@@ -172,13 +173,14 @@ static inline void main_loop(struct config *conf)
                 }
 
                 for (unsigned int si = 0; si < to_send; si++) {
-                    struct netmap_slot *slot = &ring->slot[head];
+                    slot = &ring->slot[head];
                     char *b = NETMAP_BUF(ring, slot->buf_idx);
                     memcpy((void *)b, frame_hdr, PKT_HEADER_SIZE);
                     produce_data((unsigned char *)b + base_offset, payload_len);
                     slot->len = frame_len;
                     head = nm_ring_next(ring, head);
                 }
+                slot->flags |= NS_REPORT;
                 ring->head = ring->cur = head;
                 if (to_send < bst_left) {
                     ring->cur = ring->tail;
