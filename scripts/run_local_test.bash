@@ -151,7 +151,7 @@ function print_help() {
         "The directory in which results should be written"
 
     printf "$pargformat" \
-        "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge|vale]" \
+        "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge|netmap-bridge|vale]" \
         "The virtual switch used to exchange packets"
 
     printf "$pargformat" \
@@ -372,7 +372,7 @@ function start_vswitch() {
     echo "Attempting to start the vswitch..."
     case $vswitch in
     pmd)
-        pmd_cmd="sudo $PMD -l $SWITCH_CPUS -n 2 --socket-mem 1024,0 --file-prefix=host"
+        pmd_cmd="sudo $PMD -l $(get_cpus 2) -n 2 --socket-mem 1024,0 --file-prefix=host"
         for i in "${!LXC_CONT_NAMES[@]}"; do
             pmd_cmd="$pmd_cmd --vdev eth_vhost$i,iface=/tmp/VIO/${LXC_CONT_SOCKS[i]}"
         done
@@ -381,13 +381,13 @@ function start_vswitch() {
         screen -d -S screen_vswitch `log_vswitch_option` -m $pmd_cmd
 
         # screen -d -S screen_vswitch `log_vswitch_option` -m \
-        #     sudo $PMD -l $SWITCH_CPUS -n 2 --socket-mem 1024,1024 \
+        #     sudo $PMD -l $(get_cpus 2) -n 2 --socket-mem 1024,1024 \
         #     --vdev 'eth_vhost0,iface=/tmp/VIO/sock0' \
         #     --vdev 'eth_vhost1,iface=/tmp/VIO/sock1' \
         #     --file-prefix=host --no-pci -- --auto-start
         ;;
     basicfwd)
-        pmd_cmd="sudo $BASICFWD -l $SWITCH_CPUS -n 2 --socket-mem 1024,0 --file-prefix=host"
+        pmd_cmd="sudo $BASICFWD -l $(get_cpus 2) -n 2 --socket-mem 1024,0 --file-prefix=host"
         for i in "${!LXC_CONT_NAMES[@]}"; do
             pmd_cmd="$pmd_cmd --vdev eth_vhost$i,iface=/tmp/VIO/${LXC_CONT_SOCKS[i]}"
         done
@@ -396,7 +396,7 @@ function start_vswitch() {
         screen -d -S screen_vswitch `log_vswitch_option` -m $pmd_cmd
 
         # screen -d -S screen_vswitch `log_vswitch_option` -m \
-        # sudo $BASICFWD -l $SWITCH_CPUS -n 2 --socket-mem 1024,1024 \
+        # sudo $BASICFWD -l $(get_cpus 2) -n 2 --socket-mem 1024,1024 \
         #     --vdev 'eth_vhost0,iface=/tmp/VIO/sock0' \
         #     --vdev 'eth_vhost1,iface=/tmp/VIO/sock1' \
         #     --file-prefix=host --no-pci
@@ -515,7 +515,7 @@ function start_vswitch() {
     snabb)
         num_local_ports="${#LXC_CONT_NAMES[@]}"
 
-        snabb_cmd="taskset -c $SWITCH_CPUS sudo $SNABB $num_local_ports"
+        snabb_cmd="taskset -c $(get_cpus 2) sudo $SNABB $num_local_ports"
         for i in "${!LXC_CONT_NAMES[@]}" ; do
             snabb_cmd="$snabb_cmd /tmp/VIO/${LXC_CONT_SOCKS[i]}"
         done
@@ -537,7 +537,7 @@ function start_vswitch() {
 
         # Start PF handler for PF0
         screen -d -S screen_vswitch `log_vswitch_option` -m \
-            sudo $PMD -l $SWITCH_CPUS -n 2 --socket-mem 1024,0 --file-prefix=host \
+            sudo $PMD -l $(get_cpus 2) -n 2 --socket-mem 1024,0 --file-prefix=host \
             -w 04:00.0 -- --cmdline-file=$SCRIPT_DIR/sriov.conf
 
         # Some sleep needed, mabe not 80s, but better safe than sorry
@@ -546,6 +546,25 @@ function start_vswitch() {
     linux-bridge)
         # This is not an actual switch, it is just used to start tests using normal kernel sockets
         # Hence this does nothing
+        ;;
+    netmap-bridge)
+        # Create a veth (two endpoints)
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            # Create a veth (two endpoints)
+            endpoint_host_name=veth_${i}_host
+            endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+            sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
+        done
+        # Bridge pairs of veth_hosts
+        for i in $(seq 1 2 ${#LXC_CONT_NAMES[@]}) ; do
+            this_host="veth_${i}_host"
+            prev_host="veth_$((i-1))_host"
+            echo "[DBG] Will set vswitch affinity to ${SWITCH_CPUS_ARR[i/2]}"   # TODO DEBUG
+            screen -d -S "screen_vswitch_${i}" `log_vswitch_option` -m \
+                taskset -c ${SWITCH_CPUS_ARR[i/2]} sudo bridge -i "netmap:${this_host}" -i "netmap:${prev_host}"
+        done
+        # Wait for bridges to come up
+        sleep 4s
         ;;
     vale)
         for i in "${!LXC_CONT_NAMES[@]}" ; do
@@ -628,8 +647,23 @@ function stop_vswitch() {
         # This is not an actual switch, it is just used to start tests using normal kernel sockets
         # Hence this does nothing
         ;;
+    netmap-bridge)
+        # Stop the bridges
+        for i in $(seq 1 2 ${#LXC_CONT_NAMES[@]}) ; do
+            screen_name="screen_vswitch_${i}"
+            screen -S ${screen_name} -p 0 -X stuff "^C" || true
+            wait_screen ${screen_name}
+        done
+        # Delete the veths
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            endpoint_host_name=veth_${i}_host
+            if ! sudo ip link delete ${endpoint_host_name}; then
+                echo "[note] can't stop ${endpoint_host_name} because not found"
+            fi
+        done
+        ;;
     vale)
-        # There is no process to kill, just delete the veth
+        # There is no process to kill, just delete the veths
         for i in "${!LXC_CONT_NAMES[@]}" ; do
             endpoint_host_name=veth_${i}_host
             sudo vale-ctl -d vale0:${endpoint_host_name}
@@ -670,7 +704,7 @@ function vswitch_cmdline_option() {
     sriov )
         printf "%s\n" "-s"
         ;;
-    vale )
+    vale|netmap-bridge )
         printf "%s\n" "-n"
         ;;
     * )
@@ -687,7 +721,7 @@ function consume_data_option() {
 }
 
 function netmap_iface_option() {
-    if [ "$vswitch" == vale ] ; then
+    if [ "$vswitch" == vale ] || [ "$vswitch" == netmap-bridge ] ; then
         printf "%s %s\n" "-i" "${LXC_CONT_NETMAP_LOCAL_IF[${1}]}"
     fi
 }
@@ -789,7 +823,7 @@ function start_applications() {
         # Start Container
         sudo lxc-start -n ${LXC_CONT_NAMES[i]}
 
-        if [ $vswitch == vale ]; then
+        if [ $vswitch == vale ] || [ $vswitch == netmap-bridge ] ; then
             # Make /dev/netmap visible inside guest
             sudo lxc-device -n ${LXC_CONT_NAMES[i]} add /dev/netmap
 
@@ -800,7 +834,7 @@ function start_applications() {
                 # Send a few packets to let the switch learn its forwarding table
                 # Otherwise, transmissions would be broadcast.
                 local_veth_mac=$(sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}/address)
-                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 10000 -S ${local_veth_mac} >/dev/null
+                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 100 -S ${local_veth_mac} >/dev/null
 
                 if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
                     # Target interface is the next one (by assumption), and has not been moved to container yet
@@ -890,11 +924,20 @@ function wait_schedule() {
     sleep $sleep_seconds
 }
 
+function get_cpus() {
+    # Get a comma-separated list of n cpus id
+
+    local num=$1
+    cpu_subset=(${SWITCH_CPUS_ARR[@]::$num})
+    local IFS=,
+    echo "${cpu_subset[*]}"
+}
+
 ################################################################################
 #                              CONSTANTS AND DIRS                              #
 ################################################################################
 
-vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge vale"
+vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge netmap-bridge vale"
 dimension_list="throughput latency latencyst"
 
 # TODO: READ AN ENVIRONMENT VARIABLE
@@ -905,7 +948,7 @@ FDIO_DIR=$HOME/testbed/src/vpp
 OVS_DIR=/usr/local/share/openvswitch/scripts
 SNABB="$HOME/testbed/src/snabb/src/snabb custom_switch"
 
-SWITCH_CPUS=0,2
+SWITCH_CPUS_ARR=(0 2 1 3)
 
 #FIXME: MAKE DYNAMIC
 # CONT_A=dpdk_c0
