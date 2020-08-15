@@ -677,23 +677,37 @@ netmap_install() {
         echo_action "NETMAP CONFIGURE BUILD"
         # TODO find a better way to deal with the kernel reference
         ./configure --kernel-dir=/lib/modules/$(uname -r)/build --kernel-sources=/home/llai/linux
-
-	    echo_action "NETMAP BUILD"
-	    make
-
+    
+        echo_action "NETMAP BUILD"
+        make
+    
         echo_action "NETMAP APPS BUILD"
         sudo make apps
-
-	    echo_action "NETMAP INSTALL"
-	    sudo make install
+    
+        echo_action "NETMAP INSTALL"
+        sudo make install
+    
+        # Unload vanilla kernel modules
+        if lsmod | grep veth &> /dev/null ; then
+            sudo modprobe -r veth
+        fi
+        if lsmod | grep i40e &> /dev/null ; then
+            sudo modprobe -r i40e
+        fi
+    
+        # Load netmap-aware kernel modules
+        sudo insmod netmap.ko
+        sudo insmod veth.ko
+        if [ -e "i40e-2.4.6/src/i40e.ko" ] ; then
+            sudo insmod i40e-2.4.6/src/i40e.ko
+        fi
     popd
 
-    if lsmod | grep veth &> /dev/null ; then
-        sudo modprobe -r veth
-    fi
+    # Disable checksum and segmentation offload
+    sudo ethtool -K ${NIC_NAME} tx off rx off gso off tso off gro off
 
-    sudo insmod /lib/modules/$(uname -r)/extra/netmap.ko
-    sudo insmod /lib/modules/$(uname -r)/extra/veth.ko
+    # Reduce the number of tx/rx rings (netmap does not need many)
+    sudo ethtool -L ${NIC_NAME} combined 4
 
     touch $NETMAP_CHECK_FILE
 }
@@ -857,6 +871,9 @@ CONF_SRIOV_TESTPMD=$DIR_CONFIG/sriov_testpmd.conf
 
 # Get number of threads for make command
 MAKECPUS=`get_make_cpus`
+
+# Network-card name
+NIC_NAME=enp4s0f0
 
 case $cmd in
 i)
