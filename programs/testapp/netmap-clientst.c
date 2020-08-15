@@ -60,7 +60,7 @@ int netmap_clientst_body(int argc, char *argv[])
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-l";
     netmap_argv[netmap_argc-1] = malloc(16 * sizeof(char));   // 16 digits should be enough
-    snprintf(netmap_argv[netmap_argc-1], 16, "%d", conf.pkt_size);
+    snprintf(netmap_argv[netmap_argc-1], 16, "%d", conf.pkt_size-4);    // length w/o CRC
 
     /* Burst size */
     netmap_argc += 2;

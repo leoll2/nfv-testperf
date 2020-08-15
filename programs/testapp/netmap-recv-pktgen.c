@@ -54,6 +54,13 @@ int netmap_recv_body(int argc, char *argv[])
     netmap_argv[netmap_argc-1] = malloc(32 * sizeof(char));   // 32 digits should be enough
     snprintf(netmap_argv[netmap_argc-1], 32, "%s", conf.local_interf);
 
+    /* Burst size */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-b";
+    netmap_argv[netmap_argc-1] = malloc(16 * sizeof(char));   // 16 digits should be enough
+    snprintf(netmap_argv[netmap_argc-1], 16, "%d", conf.bst_size);
+
     /* Consume */
     if (conf.touch_data) {
         netmap_argc += 1;

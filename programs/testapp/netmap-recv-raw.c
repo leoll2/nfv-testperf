@@ -39,8 +39,8 @@ static inline void main_loop(struct config *conf)
 {
     // ----------------------------- Constants ------------------------------ //
 
-    const ssize_t frame_len = conf->pkt_size;
-    const ssize_t payload_len = conf->pkt_size - OFFSET_PAYLOAD;
+    const ssize_t frame_len = conf->pkt_size - 4;
+    const ssize_t payload_len = frame_len - OFFSET_PAYLOAD;
 
     // The actual size of buffers that need to be allocated
     const ssize_t used_len = frame_len;
