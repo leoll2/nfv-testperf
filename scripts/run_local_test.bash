@@ -834,7 +834,7 @@ function start_applications() {
                 # Send a few packets to let the switch learn its forwarding table
                 # Otherwise, transmissions would be broadcast.
                 local_veth_mac=$(sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}/address)
-                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 100 -S ${local_veth_mac} >/dev/null
+                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 1 -S ${local_veth_mac} >/dev/null
 
                 if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
                     # Target interface is the next one (by assumption), and has not been moved to container yet
