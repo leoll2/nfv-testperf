@@ -548,18 +548,21 @@ function start_vswitch() {
         # Hence this does nothing
         ;;
     netmap-bridge)
-        # Create a veth (two endpoints)
+        # Set interface to promiscuous mode     # TODO do not hardcode enp4s0f0
+        sudo ip link set enp4s0f0 promisc on
+
         for i in "${!LXC_CONT_NAMES[@]}" ; do
             # Create a veth (two endpoints)
             endpoint_host_name=veth_${i}_host
             endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
             sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
+            # Give it a MAC address
+            sudo ip link set dev ${endpoint_guest_name} address ${LXC_CONT_MACS[i]}
         done
         # Bridge pairs of veth_hosts
         for i in $(seq 1 2 ${#LXC_CONT_NAMES[@]}) ; do
             this_host="veth_${i}_host"
             prev_host="veth_$((i-1))_host"
-            echo "[DBG] Will set vswitch affinity to ${SWITCH_CPUS_ARR[i/2]}"   # TODO DEBUG
             screen -d -S "screen_vswitch_${i}" `log_vswitch_option` -m \
                 taskset -c ${SWITCH_CPUS_ARR[i/2]} sudo bridge -i "netmap:${this_host}" -i "netmap:${prev_host}"
         done
@@ -567,11 +570,18 @@ function start_vswitch() {
         sleep 4s
         ;;
     vale)
+        # Set NIC to promiscuous mode     # TODO do not hardcode enp4s0f0
+        sudo ip link set enp4s0f0 promisc on
+        # Attach NIC to vale switch
+        sudo vale-ctl -a vale0:enp4s0f0
+
         for i in "${!LXC_CONT_NAMES[@]}" ; do
             # Create a veth (two endpoints)
             endpoint_host_name=veth_${i}_host
             endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
             sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
+            # Give it a MAC address
+            sudo ip link set dev ${endpoint_guest_name} address ${LXC_CONT_MACS[i]}
 
             # Connect one endpoint to vale switch
             sudo vale-ctl -a vale0:${endpoint_host_name}
@@ -661,6 +671,7 @@ function stop_vswitch() {
                 echo "[note] can't stop ${endpoint_host_name} because not found"
             fi
         done
+        sudo ip link set enp4s0f0 promisc off
         ;;
     vale)
         # There is no process to kill, just delete the veths
@@ -671,6 +682,9 @@ function stop_vswitch() {
                 echo "[note] can't stop ${endpoint_host_name} because not found"
             fi
         done
+        # Detach the NIC from vale switch
+        sudo vale-ctl -d vale0:enp4s0f0
+        sudo ip link set enp4s0f0 promisc off
         ;;
     *)
         echo "NOT A VALID VSWITCH NAME!"
@@ -831,14 +845,17 @@ function start_applications() {
             move_veth_to_container $i
 
             if [ "${LXC_CONT_CMDNAMES[i]}" == send ] || [ "${LXC_CONT_CMDNAMES[i]}" == recv ] ; then
-                # Send a few packets to let the switch learn its forwarding table
+                # Advertise (one packet) to let the switch learn its forwarding table
                 # Otherwise, transmissions would be broadcast.
-                local_veth_mac=$(sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}/address)
+
+                #local_veth_mac=$(sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}/address)
+                local_veth_mac=${LXC_CONT_MACS[i]}
                 sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 1 -S ${local_veth_mac} >/dev/null
 
                 if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
-                    # Target interface is the next one (by assumption), and has not been moved to container yet
-                    remote_veth_mac=$(cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i+1]#netmap:}/address)
+                #    # Target interface is the next one (by assumption), and has not been moved to container yet
+                #    remote_veth_mac=$(cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i+1]#netmap:}/address)
+                    remote_veth_mac=${LXC_CONT_OTHER_MACS[i]}
                     COMMANDS[$i]="${COMMANDS[i]} -D $remote_veth_mac"
                 fi
             fi
