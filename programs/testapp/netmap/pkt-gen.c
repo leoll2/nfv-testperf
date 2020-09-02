@@ -1118,6 +1118,22 @@ msb64(uint64_t x)
     static struct timespec
 wait_time(struct timespec ts)
 {
+/*
+// NOTE: we implement an alternative code (based on clock_nanosleep) to wait
+#ifdef BUSYWAIT
+    for (;;) {
+        struct timespec w, cur;
+        clock_gettime(CLOCK_REALTIME_PRECISE, &cur);
+        w = timespec_sub(ts, cur);
+        if (w.tv_sec < 0)
+            return cur;
+    }
+#else
+    while (clock_nanosleep(CLOCK_REALTIME_PRECISE, TIMER_ABSTIME, &ts, NULL) != 0);
+    return ts;
+#endif
+*/
+// NOTE: the original pkt-gen uses the following code (based on poll()) to wait
     for (;;) {
         struct timespec w, cur;
         clock_gettime(CLOCK_REALTIME_PRECISE, &cur);
@@ -2401,7 +2417,15 @@ main_thread(struct glob_arg *g)
     struct my_ctrs prev, cur;
     double delta_t;
     struct timeval tic, toc;
+    struct timespec t_proc_start = {0,0}, t_proc_end = {0,0};
+    struct timespec t_thrd_start = {0,0}, t_thrd_end = {0,0};
+    struct timespec t_real_start = {0,0}, t_real_end = {0,0};
+    struct timespec t_proc_diff, t_real_diff, t_thrd_diff;
+    uint64_t cpu_usage_cnt = 0;
 
+    clock_gettime(CLOCK_REALTIME, &t_real_start);
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t_proc_start);
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t_thrd_start);
     prev.pkts = prev.bytes = prev.events = 0;
     gettimeofday(&prev.t, NULL);
     for (;;) {
@@ -2413,6 +2437,27 @@ main_thread(struct glob_arg *g)
 
         usec = wait_for_next_report(&prev.t, &cur.t,
                 g->report_interval);
+
+        /* Print CPU usage (every 4 report intervals) */
+        if (cpu_usage_cnt % 4 == 0) {
+            clock_gettime(CLOCK_REALTIME, &t_real_end);
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t_proc_end);
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t_thrd_end);
+            t_real_diff = timespec_sub(t_real_end, t_real_start);
+            t_proc_diff = timespec_sub(t_proc_end, t_proc_start);
+            t_thrd_diff = timespec_sub(t_thrd_end, t_thrd_start);
+            D("  [CPU Load] clock_real: %ld.%03ld \t clock_proc: %ld.%03ld \t clock_thrd: %ld.%03ld \t CPU_load_%%: %.6f",
+                t_real_diff.tv_sec, t_real_diff.tv_nsec / 1000000,
+                t_proc_diff.tv_sec, t_proc_diff.tv_nsec / 1000000,
+                t_thrd_diff.tv_sec, t_thrd_diff.tv_nsec / 1000000,
+                (double)(1000000000 * t_proc_diff.tv_sec + t_proc_diff.tv_nsec) /
+                        (1000000000 * t_real_diff.tv_sec + t_real_diff.tv_nsec)
+            );
+            clock_gettime(CLOCK_REALTIME, &t_real_start);
+            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t_proc_start);
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t_thrd_start);
+        }
+        cpu_usage_cnt++;
 
         cur.pkts = cur.bytes = cur.events = 0;
         cur.min_space = 0;
