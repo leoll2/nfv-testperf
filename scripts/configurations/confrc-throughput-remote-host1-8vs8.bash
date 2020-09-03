@@ -111,6 +111,17 @@ LXC_CONT_OTHER_MACS=(   \
     02:00:00:00:00:27   \
 )
 
+LXC_CONT_NETMAP_LOCAL_IF=( \
+    netmap:iface_0_guest    \
+    netmap:iface_1_guest    \
+    netmap:iface_2_guest    \
+    netmap:iface_3_guest    \
+    netmap:iface_4_guest    \
+    netmap:iface_5_guest    \
+    netmap:iface_6_guest    \
+    netmap:iface_7_guest    \
+)
+
 # Can be either send, recv, client, clientst, server
 LXC_CONT_CMDNAMES=(     \
     send                \

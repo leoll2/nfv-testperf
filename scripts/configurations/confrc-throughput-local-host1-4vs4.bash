@@ -112,14 +112,14 @@ LXC_CONT_OTHER_MACS=(   \
 )
 
 LXC_CONT_NETMAP_LOCAL_IF=( \
-    netmap:veth_0_guest    \
-    netmap:veth_1_guest    \
-    netmap:veth_2_guest    \
-    netmap:veth_3_guest    \
-    netmap:veth_4_guest    \
-    netmap:veth_5_guest    \
-    netmap:veth_6_guest    \
-    netmap:veth_7_guest    \
+    netmap:iface_0_guest    \
+    netmap:iface_1_guest    \
+    netmap:iface_2_guest    \
+    netmap:iface_3_guest    \
+    netmap:iface_4_guest    \
+    netmap:iface_5_guest    \
+    netmap:iface_6_guest    \
+    netmap:iface_7_guest    \
 )
 
 # Can be either send, recv, client, clientst, server

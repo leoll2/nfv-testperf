@@ -51,8 +51,8 @@ LXC_CONT_OTHER_MACS=(   \
 )
 
 LXC_CONT_NETMAP_LOCAL_IF=( \
-    netmap:veth_0_guest    \
-    netmap:veth_1_guest    \
+    netmap:iface_0_guest    \
+    netmap:iface_1_guest    \
 )
 
 # Can be either send, recv, client, clientst, server
