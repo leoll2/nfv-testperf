@@ -33,7 +33,7 @@ LDLIBS		+= -lpthread -lm -lnetmap -lrt
 include $(RTE_SDK)/mk/rte.extapp.mk
 
 netmap/pkt-gen.o: netmap/pkt-gen.c
-	cc -c -O2 -pipe -Werror -Wall -Wextra -Wno-address-of-packed-member -DNO_PCAP $< -o $@
+	cc -c -O2 -pipe -Werror -Wall -Wextra -Wno-address-of-packed-member -DNO_PCAP -DBUSYWAIT $< -o $@
 
 # rewriting installation rule to copy target in container
 install: build _postinstall __postinstall
