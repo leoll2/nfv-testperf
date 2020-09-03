@@ -151,7 +151,7 @@ function print_help() {
         "The directory in which results should be written"
 
     printf "$pargformat" \
-        "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge|netmap-bridge|vale]" \
+        "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge|netmap-bridge|vale|vale-veth]" \
         "The virtual switch used to exchange packets"
 
     printf "$pargformat" \
@@ -548,7 +548,7 @@ function start_vswitch() {
         # Hence this does nothing
         ;;
     netmap-bridge)
-        # Set interface to promiscuous mode     # TODO do not hardcode enp4s0f0
+        # Set interface to promiscuous mode
         sudo ip link set enp4s0f0 promisc on
 
         for i in "${!LXC_CONT_NAMES[@]}" ; do
@@ -570,7 +570,25 @@ function start_vswitch() {
         sleep 4s
         ;;
     vale)
-        # Set NIC to promiscuous mode     # TODO do not hardcode enp4s0f0
+        # Set NIC to promiscuous mode
+        sudo ip link set enp4s0f0 promisc on
+        # Attach NIC to vale switch
+        sudo vale-ctl -a vale0:enp4s0f0
+
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            # Create a persistent VALE port
+            port_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+            sudo vale-ctl -n ${port_name}
+
+            # Give it a MAC address
+            sudo ip link set dev ${port_name} address ${LXC_CONT_MACS[i]}
+
+            # Connect it to VALE switch
+            sudo vale-ctl -a vale0:${port_name}
+        done
+        ;;
+    vale-veth)
+        # Set NIC to promiscuous mode
         sudo ip link set enp4s0f0 promisc on
         # Attach NIC to vale switch
         sudo vale-ctl -a vale0:enp4s0f0
@@ -580,6 +598,7 @@ function start_vswitch() {
             endpoint_host_name=veth_${i}_host
             endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
             sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
+
             # Give it a MAC address
             sudo ip link set dev ${endpoint_guest_name} address ${LXC_CONT_MACS[i]}
 
@@ -658,6 +677,8 @@ function stop_vswitch() {
         # Hence this does nothing
         ;;
     netmap-bridge)
+        # Wait a bit, container may not have died yet
+        sleep 2
         # Stop the bridges
         for i in $(seq 1 2 ${#LXC_CONT_NAMES[@]}) ; do
             screen_name="screen_vswitch_${i}"
@@ -674,7 +695,24 @@ function stop_vswitch() {
         sudo ip link set enp4s0f0 promisc off
         ;;
     vale)
-        # There is no process to kill, just delete the veths
+        # Wait a bit, container may not have died yet
+        sleep 2
+        # There is no process to kill, just detach the ports
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            port_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+            # Detach the port
+            sudo vale-ctl -d vale0:${port_name}
+            # Destroy the port (back in host namespace after destroying containers)
+            sudo vale-ctl -r ${port_name}
+        done
+        # Detach the NIC from vale switch
+        sudo vale-ctl -d vale0:enp4s0f0
+        sudo ip link set enp4s0f0 promisc off
+        ;;
+    vale-veth)
+        # Wait a bit, container may not have died yet
+        sleep 2
+        # There is no process to kill, just delete the veths and detach the ports
         for i in "${!LXC_CONT_NAMES[@]}" ; do
             endpoint_host_name=veth_${i}_host
             sudo vale-ctl -d vale0:${endpoint_host_name}
@@ -718,7 +756,7 @@ function vswitch_cmdline_option() {
     sriov )
         printf "%s\n" "-s"
         ;;
-    vale|netmap-bridge )
+    vale|vale-veth|netmap-bridge )
         printf "%s\n" "-n"
         ;;
     * )
@@ -735,7 +773,7 @@ function consume_data_option() {
 }
 
 function netmap_iface_option() {
-    if [ "$vswitch" == vale ] || [ "$vswitch" == netmap-bridge ] ; then
+    if [ "$vswitch" == vale ] || [ "$vswitch" == vale-veth ] || [ "$vswitch" == netmap-bridge ] ; then
         printf "%s %s\n" "-i" "${LXC_CONT_NETMAP_LOCAL_IF[${1}]}"
     fi
 }
@@ -828,6 +866,17 @@ function move_veth_to_container() {
     sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ip link set ${endpoint_guest_name} up
 }
 
+function move_vale_port_to_container() {
+    # This functions moves a VALE port to the container.
+    # It assumes that the container is already running
+    i=$1
+    cont_pid=$(sudo lxc-info -pHn ${LXC_CONT_NAMES[i]})
+    port_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+    sudo ip link set dev ${port_name} netns ${cont_pid} name ${port_name}
+    # Enable the interface (it goes DOWN after moving it)
+    sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ip link set ${port_name} up
+}
+
 function start_applications() {
     echo "Starting the two applications, one per each container..."
 
@@ -837,26 +886,27 @@ function start_applications() {
         # Start Container
         sudo lxc-start -n ${LXC_CONT_NAMES[i]}
 
-        if [ $vswitch == vale ] || [ $vswitch == netmap-bridge ] ; then
+        if [ $vswitch == vale ] || [ "$vswitch" == vale-veth ] || [ $vswitch == netmap-bridge ] ; then
             # Make /dev/netmap visible inside guest
             sudo lxc-device -n ${LXC_CONT_NAMES[i]} add /dev/netmap
 
             # Move one veth endpoint into the container
-            move_veth_to_container $i
+            if [ "$vswitch" == vale-veth ] || [ $vswitch == netmap-bridge ] ; then
+                move_veth_to_container $i
+            elif [ "$vswitch" == vale ] ; then
+                move_vale_port_to_container $i
+            fi
 
             if [ "${LXC_CONT_CMDNAMES[i]}" == send ] || [ "${LXC_CONT_CMDNAMES[i]}" == recv ] ; then
                 # Advertise (one packet) to let the switch learn its forwarding table
                 # Otherwise, transmissions would be broadcast.
-
-                #local_veth_mac=$(sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}/address)
-                local_veth_mac=${LXC_CONT_MACS[i]}
-                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 1 -S ${local_veth_mac} >/dev/null
+                local_iface_mac=${LXC_CONT_MACS[i]}
+                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 1 -S ${local_iface_mac} >/dev/null
 
                 if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
-                #    # Target interface is the next one (by assumption), and has not been moved to container yet
-                #    remote_veth_mac=$(cat /sys/class/net/${LXC_CONT_NETMAP_LOCAL_IF[i+1]#netmap:}/address)
-                    remote_veth_mac=${LXC_CONT_OTHER_MACS[i]}
-                    COMMANDS[$i]="${COMMANDS[i]} -D $remote_veth_mac"
+                    # Find the MAC of the target
+                    remote_iface_mac=${LXC_CONT_OTHER_MACS[i]}
+                    COMMANDS[$i]="${COMMANDS[i]} -D $remote_iface_mac"
                 fi
             fi
         fi
@@ -954,7 +1004,7 @@ function get_cpus() {
 #                              CONSTANTS AND DIRS                              #
 ################################################################################
 
-vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge netmap-bridge vale"
+vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge netmap-bridge vale vale-veth"
 dimension_list="throughput latency latencyst"
 
 # TODO: READ AN ENVIRONMENT VARIABLE
