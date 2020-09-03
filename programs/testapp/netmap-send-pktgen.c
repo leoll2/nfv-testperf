@@ -24,7 +24,7 @@ int netmap_send_body(int argc, char *argv[])
     int netmap_argc = 1;
     char **netmap_argv = NULL;
     struct config conf = CONFIG_STRUCT_INITIALIZER;
-    char *iface_name;
+    //char *iface_name;
 
     // Default configuration for local program  /* TODO is this needed? */
     conf.local_port = SEND_PORT;
@@ -60,7 +60,7 @@ int netmap_send_body(int argc, char *argv[])
     netmap_argv[netmap_argc-2] = "-i";
     netmap_argv[netmap_argc-1] = malloc(32 * sizeof(char)); // 32 chars should be enough
     snprintf(netmap_argv[netmap_argc-1], 32, "%s", conf.local_interf);  // include netmap: prefix
-    iface_name = netmap_argv[netmap_argc-1] + 7;            // exclude netmap: prefix
+    //iface_name = netmap_argv[netmap_argc-1] + 7;            // exclude netmap: prefix
 
     /* Packet size */
     netmap_argc += 2;
@@ -97,7 +97,8 @@ int netmap_send_body(int argc, char *argv[])
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-S";
     netmap_argv[netmap_argc-1] = malloc(18 * sizeof(char));
-    get_mac_from_iface(iface_name, netmap_argv[netmap_argc-1]);
+    //get_mac_from_iface(iface_name, netmap_argv[netmap_argc-1]);
+    snprintf(netmap_argv[netmap_argc-1], 18, "%s", conf.local_mac);
 
     /* Destination MAC */
     netmap_argc += 2;
@@ -108,6 +109,13 @@ int netmap_send_body(int argc, char *argv[])
 
     /* Last arg must be NULL by convention */
     netmap_argv[netmap_argc] = NULL;
+
+    /* Print a list of the arguments: */
+    printf("Calling pkt-gen with arguments: ");
+    for (int i = 0; i < netmap_argc; i++) {
+        printf("%s ", netmap_argv[i]);
+    }
+    printf("\n");
 
     netmap_main_loop(netmap_argc, netmap_argv);
         
