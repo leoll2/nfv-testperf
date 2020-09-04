@@ -85,6 +85,13 @@ int netmap_server_body(int argc, char *argv[])
     /* Last arg must be NULL by convention */
     netmap_argv[netmap_argc] = NULL;
 
+    /* Print a list of the arguments: */
+    printf("Calling pkt-gen with arguments: ");
+    for (int i = 0; i < netmap_argc; i++) {
+        printf("%s ", netmap_argv[i]);
+    }
+    printf("\n");
+
     printf("Launching netmap_main_loop on receiver\n");
     netmap_main_loop(netmap_argc, netmap_argv);
     printf("Finished netmap_main_loop on receiver\n");
