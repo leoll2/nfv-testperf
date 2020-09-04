@@ -53,7 +53,22 @@ int netmap_client_body(int argc, char *argv[])
     netmap_argc += 2;
     netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
     netmap_argv[netmap_argc-2] = "-i";
-    netmap_argv[netmap_argc-1] = "netmap:veth_0_guest"; // TODO this must be parametric!
+    netmap_argv[netmap_argc-1] = malloc(32 * sizeof(char)); // 32 chars should be enough
+    snprintf(netmap_argv[netmap_argc-1], 32, "%s", conf.local_interf);  // include netmap: prefix
+
+    /* Sender MAC */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-S";
+    netmap_argv[netmap_argc-1] = malloc(18 * sizeof(char));
+    snprintf(netmap_argv[netmap_argc-1], 18, "%s", conf.local_mac);
+
+    /* Destination MAC */
+    netmap_argc += 2;
+    netmap_argv = realloc(netmap_argv, (netmap_argc+1) * sizeof(char *));
+    netmap_argv[netmap_argc-2] = "-D";
+    netmap_argv[netmap_argc-1] = malloc(18 * sizeof(char));
+    snprintf(netmap_argv[netmap_argc-1], 18, "%s", conf.remote_mac);
 
     /* Packet size */
     netmap_argc += 2;
