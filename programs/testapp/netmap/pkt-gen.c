@@ -643,7 +643,7 @@ dump_payload(const char *_p, int len, struct netmap_ring *ring, int cur)
     /* get the length in ASCII of the length of the packet. */
 
     printf("ring %p cur %5d [buf %6d flags 0x%04x len %5d]\n",
-            ring, cur, ring->slot[cur].buf_idx,
+            (void*)ring, cur, ring->slot[cur].buf_idx,
             ring->slot[cur].flags, len);
     /* hexdump routine */
     for (i = 0; i < len; ) {
@@ -2575,7 +2575,7 @@ main_thread(struct glob_arg *g)
 struct td_desc {
     int ty;
     char *key;
-    void *f;
+    void *(*f)(void *);
     int default_burst;
 };
 
