@@ -22,18 +22,15 @@ APP		= testapp
 SRCS-y		+= main.c common.c stats.c timestamp.c dpdk.c
 SRCS-y		+= server.c client.c clientst.c send.c recv.c
 SRCS-y		+= dpdk-server.c dpdk-client.c dpdk-clientst.c dpdk-send.c dpdk-recv.c
-SRCS-y		+= netmap-send-pktgen.c netmap-recv-pktgen.c netmap-client.c netmap-clientst.c netmap-server.c netmap/pkt-gen.c
+SRCS-y		+= netmap/pkt-gen.c netmap-send-pktgen.c netmap-recv-pktgen.c netmap-client.c netmap-clientst.c netmap-server.c
 
 # do I need override on CFLAGS? also, change -O2 to -ggdb -O0 when debug
 CPPFLAGS	+= -iquote $(THIS_DIR)/inc
-CFLAGS		+= -Wall -Wextra -pedantic -Werror -march=native -pipe -O2 # -O0 -ggdb
+CFLAGS		+= -Wall -Wextra -pedantic -Werror -march=native -pipe -O2 -Wno-overlength-strings -Wno-address-of-packed-member -DNO_PCAP -DBUSYWAIT
 LDLIBS		+= -lpthread -lm -lnetmap -lrt
 
 # dpdk external app makefile
 include $(RTE_SDK)/mk/rte.extapp.mk
-
-netmap/pkt-gen.o: netmap/pkt-gen.c
-	cc -c -O2 -pipe -Werror -Wall -Wextra -Wno-address-of-packed-member -DNO_PCAP -DBUSYWAIT $< -o $@
 
 # rewriting installation rule to copy target in container
 install: build _postinstall __postinstall
