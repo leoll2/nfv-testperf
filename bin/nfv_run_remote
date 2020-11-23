@@ -43,11 +43,11 @@ while getopts ":d:t:f:o:v:r:b:p:H:C:chTDBRS:" opt; do
         exit 0
         ;;
     \?)
-        echo "Invalid option: -$OPTARG"
+        echo "nfv_run_remote: invalid option: -$OPTARG"
         exit 1
         ;;
     :)
-        echo "Invalid option: -$OPTARG ($(tolongopt "-$OPTARG")) requires an argument"
+        echo "nfv_run_remote: invalid option: -$OPTARG ($(tolongopt "-$OPTARG")) requires an argument"
         exit 1
         ;;
     esac

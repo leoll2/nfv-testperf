@@ -2,6 +2,8 @@
 
 set -e
 
+NIC_NAME=enp4s0f0   # TODO get rid of this
+
 ################################################################################
 #                                  UTILITIES                                   #
 ################################################################################
@@ -155,7 +157,7 @@ function print_help() {
     printwarg "-o, --out-dir" "<path>[=out]" \
         "The directory in which results should be written"
 
-    printwarg "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge]" \
+    printwarg "-v, --vswitch" "[pmd*|vpp|ovs|basicfwd|snabb|sriov|linux-bridge|netmap-bridge|vale|vale-veth]" \
         "The virtual switch used to exchange packets"
 
     printwarg "-r, --rate" "<number>[=$default_rate]" \
@@ -307,11 +309,11 @@ function parse_parameters() {
             exit 0
             ;;
         \?)
-            echo "Invalid option: -$OPTARG"
+            echo "nfv_run_local: invalid option: -$OPTARG"
             exit 1
             ;;
         :)
-            echo "Invalid option: -$OPTARG ($(tolongopt "-$OPTARG")) requires an argument"
+            echo "nfv_run_local: invalid option: -$OPTARG ($(tolongopt "-$OPTARG")) requires an argument"
             exit 1
             ;;
         esac
@@ -369,7 +371,7 @@ function start_vswitch() {
     echo "Attempting to start the vswitch..."
     case $vswitch in
     pmd)
-        pmd_cmd="sudo $PMD -l $SWITCH_CPUS -n 2 --socket-mem 1024,0 --file-prefix=host"
+        pmd_cmd="sudo $PMD -l $(get_cpus 2) -n 2 --socket-mem 1024,0 --file-prefix=host"
         for i in "${!LXC_CONT_NAMES[@]}"; do
             pmd_cmd="$pmd_cmd --vdev eth_vhost$i,iface=/tmp/VIO/${LXC_CONT_SOCKS[i]}"
         done
@@ -381,13 +383,13 @@ function start_vswitch() {
         sleep 80s
 
         # screen -d -S screen_vswitch `log_vswitch_option` -m \
-        #     sudo $PMD -l $SWITCH_CPUS -n 2 --socket-mem 1024,1024 \
+        #     sudo $PMD -l $(get_cpus 2) -n 2 --socket-mem 1024,1024 \
         #     --vdev 'eth_vhost0,iface=/tmp/VIO/sock0' \
         #     --vdev 'eth_vhost1,iface=/tmp/VIO/sock1' \
         #     --file-prefix=host --no-pci -- --auto-start
         ;;
     basicfwd)
-        pmd_cmd="sudo $BASICFWD -l $SWITCH_CPUS -n 2 --socket-mem 1024,0 --file-prefix=host"
+        pmd_cmd="sudo $BASICFWD -l $(get_cpus 2) -n 2 --socket-mem 1024,0 --file-prefix=host"
         for i in "${!LXC_CONT_NAMES[@]}"; do
             pmd_cmd="$pmd_cmd --vdev eth_vhost$i,iface=/tmp/VIO/${LXC_CONT_SOCKS[i]}"
         done
@@ -396,7 +398,7 @@ function start_vswitch() {
         screen -d -S screen_vswitch $(log_vswitch_option) -m $pmd_cmd
 
         # screen -d -S screen_vswitch `log_vswitch_option` -m \
-        # sudo $BASICFWD -l $SWITCH_CPUS -n 2 --socket-mem 1024,1024 \
+        # sudo $BASICFWD -l $(get_cpus 2) -n 2 --socket-mem 1024,1024 \
         #     --vdev 'eth_vhost0,iface=/tmp/VIO/sock0' \
         #     --vdev 'eth_vhost1,iface=/tmp/VIO/sock1' \
         #     --file-prefix=host --no-pci
@@ -516,7 +518,7 @@ function start_vswitch() {
     snabb)
         num_local_ports="${#LXC_CONT_NAMES[@]}"
 
-        snabb_cmd="taskset -c $SWITCH_CPUS sudo $SNABB $num_local_ports"
+        snabb_cmd="taskset -c $(get_cpus 2) sudo $SNABB $num_local_ports"
         for i in "${!LXC_CONT_NAMES[@]}"; do
             snabb_cmd="$snabb_cmd /tmp/VIO/${LXC_CONT_SOCKS[i]}"
         done
@@ -541,7 +543,7 @@ function start_vswitch() {
 
         # Start PF handler for PF0
         screen -d -S screen_vswitch $(log_vswitch_option) -m \
-            sudo "$PMD" -l "$SWITCH_CPUS" -n 2 --socket-mem 1024,0 --file-prefix=host \
+            sudo "$PMD" -l $(get_cpus 2) -n 2 --socket-mem 1024,0 --file-prefix=host \
             -w 04:00.0 -- --cmdline-file="${SRIOV_TESTPMD_CONF}"
 
         # Some sleep needed, mabe not 80s, but better safe than sorry
@@ -550,6 +552,69 @@ function start_vswitch() {
     linux-bridge)
         # This is not an actual switch, it is just used to start tests using normal kernel sockets
         # Hence this does nothing
+        ;;
+    netmap-bridge)
+        # TODO remove hardcoded interface name
+        setup_iface_for_netmap ${NIC_NAME}
+
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            # Create a veth (two endpoints)
+            endpoint_host_name=veth_${i}_host
+            endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+            sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
+            # Give it a MAC address
+            sudo ip link set dev ${endpoint_guest_name} address ${LXC_CONT_MACS[i]}
+        done
+
+        # Bridge pairs of veth_hosts
+        for i in $(seq 1 2 ${#LXC_CONT_NAMES[@]}) ; do
+            this_host="veth_${i}_host"
+            prev_host="veth_$((i-1))_host"
+            screen -d -S "screen_vswitch_${i}" `log_vswitch_option` -m \
+                taskset -c ${SWITCH_CPUS_ARR[i/2]} sudo bridge -i "netmap:${this_host}" -i "netmap:${prev_host}"
+        done
+
+        # Wait for bridges to come up
+        sleep 4s
+        ;;
+    vale)
+        # TODO remove hardcoded interface name
+        setup_iface_for_netmap ${NIC_NAME}
+
+        # Attach NIC to vale switch
+        sudo vale-ctl -a vale0:${NIC_NAME}
+
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            # Create a persistent VALE port
+            port_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+            sudo vale-ctl -n ${port_name}
+
+            # Give it a MAC address
+            sudo ip link set dev ${port_name} address ${LXC_CONT_MACS[i]}
+
+            # Connect it to VALE switch
+            sudo vale-ctl -a vale0:${port_name}
+        done
+        ;;
+    vale-veth)
+        # TODO remove hardcoded interface name
+        setup_iface_for_netmap ${NIC_NAME}
+
+        # Attach NIC to vale switch
+        sudo vale-ctl -a vale0:${NIC_NAME}
+
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            # Create a veth (two endpoints)
+            endpoint_host_name=veth_${i}_host
+            endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+            sudo ip link add dev ${endpoint_host_name} type veth peer name ${endpoint_guest_name}
+
+            # Give it a MAC address
+            sudo ip link set dev ${endpoint_guest_name} address ${LXC_CONT_MACS[i]}
+
+            # Connect one endpoint to vale switch
+            sudo vale-ctl -a vale0:${endpoint_host_name}
+        done
         ;;
     *)
         echo "NOT A VALID VSWITCH NAME!"
@@ -621,6 +686,66 @@ function stop_vswitch() {
         # This is not an actual switch, it is just used to start tests using normal kernel sockets
         # Hence this does nothing
         ;;
+    netmap-bridge)
+        # Wait a bit, container may not have died yet
+        sleep 2
+
+        # Stop the bridges
+        for i in $(seq 1 2 ${#LXC_CONT_NAMES[@]}) ; do
+            screen_name="screen_vswitch_${i}"
+            screen -S ${screen_name} -p 0 -X stuff "^C" || true
+            wait_screen ${screen_name}
+        done
+
+        # Delete the veths
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            endpoint_host_name=veth_${i}_host
+            if ! sudo ip link delete ${endpoint_host_name}; then
+                echo "[note] can't stop ${endpoint_host_name} because not found"
+            fi
+        done
+
+        # Reset the interface
+        reset_iface ${NIC_NAME}
+        ;;
+    vale)
+        # Wait a bit, container may not have died yet
+        sleep 2
+
+        # There is no process to kill, just detach the ports
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            port_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+            # Detach the port
+            sudo vale-ctl -d vale0:${port_name}
+            # Destroy the port (back in host namespace after destroying containers)
+            sudo vale-ctl -r ${port_name}
+        done
+
+        # Detach the NIC from vale switch
+        sudo vale-ctl -d vale0:${NIC_NAME}
+
+        # Reset the interface
+        reset_iface ${NIC_NAME}
+        ;;
+    vale-veth)
+        # Wait a bit, container may not have died yet
+        sleep 2
+
+        # There is no process to kill, just delete the veths and detach the ports
+        for i in "${!LXC_CONT_NAMES[@]}" ; do
+            endpoint_host_name=veth_${i}_host
+            sudo vale-ctl -d vale0:${endpoint_host_name}
+            if ! sudo ip link delete ${endpoint_host_name}; then
+                echo "[note] can't stop ${endpoint_host_name} because not found"
+            fi
+        done
+
+        # Detach the NIC from vale switch
+        sudo vale-ctl -d vale0:${NIC_NAME}
+
+        # Reset the interface
+        reset_iface ${NIC_NAME}
+        ;;
     *)
         echo "NOT A VALID VSWITCH NAME!"
         exit 1
@@ -651,11 +776,14 @@ function vswitch_cmdline_option() {
     linux-bridge*) ;;
 
     sriov)
-        echo "-s"
+        printf "%s\n" "-s"
+        ;;
+    vale|vale-veth|netmap-bridge )
+        printf "%s\n" "-n"
         ;;
     *)
         # Use simple DPDK
-        echo "-d"
+        printf "%s\n" "-d"
         ;;
     esac
 }
@@ -666,13 +794,19 @@ function consume_data_option() {
     fi
 }
 
+function netmap_iface_option() {
+    if [ "$vswitch" == vale ] || [ "$vswitch" == vale-veth ] || [ "$vswitch" == netmap-bridge ] ; then
+        printf "%s %s\n" "-i" "${LXC_CONT_NETMAP_LOCAL_IF[${1}]}"
+    fi
+}
+
 # TODO: other options
 # TODO: raw socket option somehow
 # NOTICE: -m option forces programs that support mmsg api to use it
 # NOTICE: -s option enables silent mode for any application
 function fill_commands() {
     for i in "${!LXC_CONT_NAMES[@]}"; do
-        COMMANDS[$i]="/nfv_run_in_container -m ${LXC_CONT_NAMES[i]} $(vswitch_cmdline_option) ${LXC_CONT_CMDNAMES[i]} -- ${LXC_CONT_IPS[i]} ${LXC_CONT_MACS[i]} ${LXC_CONT_OTHER_IPS[i]} ${LXC_CONT_OTHER_MACS[i]} $(silent_mode_opt) $(raw_mode_opt) $(noblock_mode_opt) $(multi_msg_opt) -r $rate -b $bst_size -p $pkt_size $(consume_data_option)"
+        COMMANDS[$i]="/nfv_run_in_container -m ${LXC_CONT_NAMES[i]} $(vswitch_cmdline_option) ${LXC_CONT_CMDNAMES[i]} -- ${LXC_CONT_IPS[i]} ${LXC_CONT_MACS[i]} ${LXC_CONT_OTHER_IPS[i]} ${LXC_CONT_OTHER_MACS[i]} $(silent_mode_opt) $(raw_mode_opt) $(noblock_mode_opt) $(multi_msg_opt) -r $rate -b $bst_size -p $pkt_size $(netmap_iface_option $i) $(consume_data_option)"
     done
 }
 
@@ -722,11 +856,24 @@ function prepare_system_resources() {
     sudo insmod "${RTE_INSTALL_PATH}/lib/modules/$(uname -r)/extra/dpdk/igb_uio.ko" 2>/dev/null || true
     # TODO: add insmod to sriov_tools
 
-    # Set processor to high performance, disable turbo boost
+    # Set governor to 'performance'
     for CPU_FREQ_GOVERNOR in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
         [ -f "$CPU_FREQ_GOVERNOR" ] || continue
         sudo echo -n performance | sudo tee "$CPU_FREQ_GOVERNOR" >/dev/null
     done
+
+    # Prevent thermal throttling
+    # FREQ_PERCENTAGE_1=$(($(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct) - $(cat /sys/devices/system/cpu/intel_pstate/turbo_pct) - 5))
+    # FREQ_PERCENTAGE_2=$(($(cat /sys/devices/system/cpu/intel_pstate/turbo_pct) - 5))
+    # if [ $FREQ_PERCENTAGE_1 -lt $FREQ_PERCENTAGE_2 ] ; then
+    #     FREQ_PERCENTAGE=$FREQ_PERCENTAGE_1
+    # else
+    #     FREQ_PERCENTAGE=$FREQ_PERCENTAGE_2
+    # fi
+    # echo $FREQ_PERCENTAGE | sudo tee /sys/devices/system/cpu/intel_pstate/max_perf_pct > /dev/null
+    # echo $FREQ_PERCENTAGE | sudo tee /sys/devices/system/cpu/intel_pstate/min_perf_pct > /dev/null
+
+    # Disable turbo boost
     echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo >/dev/null
 }
 
@@ -743,6 +890,28 @@ function prepare_outdir() {
     # rm $outdir/${CONT_B}_`get_command_name_cont_b`.log 2>/dev/null || true
 }
 
+function move_veth_to_container() {
+    # This functions moves one of the veth endpoints to the container.
+    # It assumes that the container is already running
+    i=$1
+    cont_pid=$(sudo lxc-info -pHn ${LXC_CONT_NAMES[i]})
+    endpoint_guest_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+    sudo ip link set dev ${endpoint_guest_name} netns ${cont_pid} name ${endpoint_guest_name}
+    # Enable the interface (it goes DOWN after moving it)
+    sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ip link set ${endpoint_guest_name} up
+}
+
+function move_vale_port_to_container() {
+    # This functions moves a VALE port to the container.
+    # It assumes that the container is already running
+    i=$1
+    cont_pid=$(sudo lxc-info -pHn ${LXC_CONT_NAMES[i]})
+    port_name=${LXC_CONT_NETMAP_LOCAL_IF[i]#netmap:}
+    sudo ip link set dev ${port_name} netns ${cont_pid} name ${port_name}
+    # Enable the interface (it goes DOWN after moving it)
+    sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ip link set ${port_name} up
+}
+
 function start_applications() {
     echo "Starting the two applications, one per each container..."
 
@@ -751,6 +920,29 @@ function start_applications() {
     for i in "${!LXC_CONT_NAMES[@]}"; do
         # Start Container
         sudo lxc-start -n "${LXC_CONT_NAMES[i]}"
+
+        if [ $vswitch == vale ] || [ "$vswitch" == vale-veth ] || [ $vswitch == netmap-bridge ] ; then
+            # Make /dev/netmap visible inside guest
+            sudo lxc-device -n ${LXC_CONT_NAMES[i]} add /dev/netmap
+
+            # Move one veth endpoint into the container
+            if [ "$vswitch" == vale-veth ] || [ $vswitch == netmap-bridge ] ; then
+                move_veth_to_container $i
+            elif [ "$vswitch" == vale ] ; then
+                move_vale_port_to_container $i
+            fi
+
+            # Advertise (one packet) to let the switch learn its forwarding table;
+            # otherwise, all transmissions would be broadcast because the traffic is unidirectional.
+            local_iface_mac=${LXC_CONT_MACS[i]}
+            sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 1 -S ${local_iface_mac} >/dev/null
+
+            if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
+                # Find the MAC of the target
+                remote_iface_mac=${LXC_CONT_OTHER_MACS[i]}
+                COMMANDS[$i]="${COMMANDS[i]} -D $remote_iface_mac"
+            fi
+        fi
 
         # Launch application inside container
         screen -d -S "screen_${LXC_CONT_NAMES[i]}" -L -Logfile "${outdir}/${LXC_CONT_NAMES[i]}_${LXC_CONT_CMDNAMES[i]}.log" -m \
@@ -837,11 +1029,37 @@ function wait_schedule() {
     sleep $sleep_seconds
 }
 
+function get_cpus() {
+    # Get a comma-separated list of n cpus id
+
+    local num=$1
+    cpu_subset=(${SWITCH_CPUS_ARR[@]::$num})
+    local IFS=,
+    echo "${cpu_subset[*]}"
+}
+
+function setup_iface_for_netmap() {
+
+    # Set the interface to promiscuous mode
+    sudo ip link set $1 promisc on
+
+    # Disable checksum and segmentation offload
+    sudo ethtool -K $1 tx off rx off gso off tso off gro off
+
+    # Reduce the number of tx/rx rings (netmap does not need many)
+    sudo ethtool -L $1 combined 4
+}
+
+function reset_iface() {
+    sudo ifconfig $1 down
+    sudo ifconfig $1 up
+}
+
 ################################################################################
 #                              CONSTANTS AND DIRS                              #
 ################################################################################
 
-vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge"
+vswitch_list="pmd vpp ovs basicfwd snabb sriov linux-bridge netmap-bridge vale vale-veth"
 dimension_list="throughput latency latencyst"
 
 # This is used to get reliably the original path of the script
@@ -862,7 +1080,7 @@ BASICFWD=${RTE_INSTALL_PATH}/share/dpdk/examples/skeleton/${RTE_TARGET}/app/basi
 OVS_DIR=/usr/local/share/openvswitch/scripts
 SNABB="${NFV_PATH}/src/snabb/src/snabb custom_switch"
 
-SWITCH_CPUS=0,2
+SWITCH_CPUS_ARR=(0 2 1 3)
 
 #FIXME: MAKE DYNAMIC
 # CONT_A=dpdk_c0

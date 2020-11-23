@@ -184,11 +184,11 @@ function parse_parameters() {
             exit 0
             ;;
         \?)
-            echo "Invalid option: -\"$OPTARG\""
+            echo "nfv_run_multiple: invalid option: -\"$OPTARG\""
             exit 1
             ;;
         :)
-            echo "Invalid option: -\"$OPTARG\" ($(tolongopt -"$OPTARG")) requires an argument"
+            echo "nfv_run_multiple: invalid option: -\"$OPTARG\" ($(tolongopt -"$OPTARG")) requires an argument"
             exit 1
             ;;
         esac

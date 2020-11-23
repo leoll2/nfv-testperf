@@ -833,12 +833,6 @@ netmap_install() {
         fi
     popd
 
-    # TODO move this to run_local
-    # Disable checksum and segmentation offload
-    sudo ethtool -K enp4s0f0 tx off rx off gso off tso off gro off
-    # Reduce the number of tx/rx rings (netmap does not need many)
-    sudo ethtool -L enp4s0f0 combined 4
-
     # Copy pkt-gen (netmap) into container filesystem
     pkt_gen_path=$(whereis -b pkt-gen | head -n 1 | cut -d ' ' -f2)
     if [ -z "${pkt_gen_path}" ] ; then
