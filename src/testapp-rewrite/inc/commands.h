@@ -27,9 +27,11 @@ typedef int (*main_body_t)(int, char **);
 static const char *const commands_n[] = {
     "server",      "client",      "clientst",      "send",      "recv",
     "dpdk-server", "dpdk-client", "dpdk-clientst", "dpdk-send", "dpdk-recv",
+    "netmap-server", "netmap-client", "netmap-clientst", "netmap-send", "netmap-recv"
 };
 
 static const main_body_t commands_f[] = {
+    server_body, client_body, clientst_body, send_body, recv_body,
     server_body, client_body, clientst_body, send_body, recv_body,
     server_body, client_body, clientst_body, send_body, recv_body,
 };

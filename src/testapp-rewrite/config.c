@@ -14,6 +14,7 @@
 
 #include <arpa/inet.h>
 #include <net/if.h>
+#include <net/if_arp.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
@@ -86,6 +87,10 @@ const char usage_format_string[] =
     "use.\n"
     "                           Valid only for sockets-based programs, not "
     "DPDK ones.\n"
+    "\n"
+    "    -i <interf_name>       Name of local interface (netmap-only).\n"
+    "\n"
+    "    -D <mac>               Destination MAC address (netmap-only).\n"
     "\n"
     "    -B                     Use blocking sockets instead of nonblocking "
     "ones.\n"
@@ -164,7 +169,7 @@ static inline int options_parse(int argc, char *argv[], struct config *conf,
     const size_t buflen = sizeof(conf->local_interf);
     assert(buflen > 0);
 
-    while ((opt = getopt(argc, argv, "+r:p:b:R:cmsB")) != -1) {
+    while ((opt = getopt(argc, argv, "+r:p:b:R:i:D:cmsB")) != -1) {
         switch (opt) {
         case 'r':
             conf->rate = atoi(optarg);
@@ -186,6 +191,12 @@ static inline int options_parse(int argc, char *argv[], struct config *conf,
             strncpy(conf->local_interf, optarg, buflen - 1);
             conf->local_interf[buflen - 1] = '\0';
 
+            break;
+        case 'i':
+            strncpy(conf->local_interf, optarg, strlen(optarg));
+            break;
+        case 'D':
+            strncpy(conf->remote_mac, optarg, strlen(optarg));
             break;
         case 'B':
             conf->use_block = true;
@@ -300,6 +311,47 @@ static inline int addr_mac_get(char *str, const struct sockaddr_ll *addr) {
 
     return 0;
 }
+
+/* Retrieve the MAC address of a given interface.
+ * The address is returned as a string in the outbuf parameter
+ *
+ * NOTICE: assumes that outbuf is large enough to fit a MAC address string
+ * */
+void get_mac_from_iface(char *iface_name, char *outbuf)
+{
+    struct ifreq ifr;
+    size_t iface_name_len = strlen(iface_name);
+
+    if (iface_name_len < sizeof(ifr.ifr_name)) {
+        memcpy(ifr.ifr_name, iface_name, iface_name_len);
+        ifr.ifr_name[iface_name_len] = 0;
+    } else {
+        fprintf(stderr, "ERROR: interface name is too long\n");
+        exit(-1);
+    }
+
+    int fd = socket(AF_UNIX,SOCK_DGRAM, 0);
+    if (fd == -1) {
+        fprintf(stderr, "ERROR: can't create socket for iface config retrieval\n");
+        exit(-1);
+    }
+
+    if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1) {
+        close(fd);
+        fprintf(stderr, "ERROR: can't ioctl to retrieve the MAC address\n");
+        exit(-1);
+    }
+    close(fd);
+
+    if (ifr.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
+        fprintf(stderr, "ERROR: interface is not ethernet\n");
+        exit(-1);
+    }
+
+    const unsigned char* mac = (unsigned char*)ifr.ifr_hwaddr.sa_data;
+    snprintf(outbuf, 18, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+}
+
 
 /**
  * Parse non-option arguments.

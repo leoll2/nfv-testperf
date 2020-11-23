@@ -103,7 +103,7 @@ struct config {
     int sock_fd; /* Socket file descriptor (NFC_SOCK_DGRAM or NFV_SOCK_RAW only)
                   */
 
-    char local_interf[16]; /* The name of the local interface to be used
+    char local_interf[32]; /* The name of the local interface to be used
                               (NFV_SOCK_RAW only) */
 
     struct dpdk_conf
