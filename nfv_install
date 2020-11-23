@@ -88,7 +88,7 @@ function parse_parameters() {
 
     # NOTICE: underscores are important
     if [ -z "$args" ] || [[ "$args" == *_all_* ]]; then
-        args="_all_rootfs_lxc_dpdk_ovs_vpp_snabb_bin_"
+        args="_all_rootfs_lxc_dpdk_ovs_vpp_snabb_netmap_bin_"
     fi
 }
 
@@ -139,6 +139,9 @@ function get_make_cpus() {
         echo_warning "HINT: To build applications faster (using more CPUs) export MAKE_AGGRESSIVE=1 before running the installation script" >/dev/stderr
         makecpus=$(echo "$cpunum*0.7" | bc)
         makecpus=$(printf '%.0f\n' "$makecpus")
+        if [ "$makecpus" == 0 ] ; then
+            makecpus=1
+        fi
     fi
 
     echo "$makecpus"
@@ -774,6 +777,116 @@ function snabb_remove() {
     rm -f "$SNABB_CHECK_FILE"
 }
 
+#################### NETMAP MANAGEMENT #####################
+
+netmap_install() {
+    echo_section "Installing netmap"
+
+    # If already installed, skip
+    if [ -e $NETMAP_CHECK_FILE ] ; then
+        echo_warning "ALREADY INSTALLED -- SKIPPING"
+        return 0
+    fi
+
+    # Download netmap
+    rm -rf $DIR_NETMAP_SRC
+    git clone https://github.com/luigirizzo/netmap $DIR_NETMAP_SRC
+
+    # Download the kernel sources matching the current kernel version
+    if ! git clone --depth 1 --branch "v$(uname -r | cut -d. -f1-2)" \
+            git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git $DIR_KERNEL_SRC; then
+        echo_warning "Failed to download Linux kernel sources (needed by netmap)"
+        exit 1
+    fi
+
+    pushd $DIR_NETMAP_SRC/LINUX
+        echo_action "NETMAP CONFIGURE BUILD"
+        ./configure --kernel-dir=/lib/modules/$(uname -r)/build --kernel-sources=$DIR_KERNEL_SRC
+
+        echo_action "NETMAP BUILD (-j $MAKECPUS)"
+        make -j "$MAKECPUS"
+
+        echo_action "NETMAP APPS BUILD"
+        sudo make apps
+
+        echo_action "NETMAP INSTALL"
+        sudo make install
+
+        # Unload vanilla kernel modules
+        if lsmod | grep veth &> /dev/null ; then
+            echo_action "Removing module 'veth'"
+            sudo modprobe -r veth
+        fi
+        if lsmod | grep i40e &> /dev/null ; then
+            echo_action "Removing module 'i40e'"
+            sudo modprobe -r i40e
+        fi
+
+        # Load netmap-aware kernel modules
+        echo_action "Inserting patched module 'netmap'"
+        sudo insmod netmap.ko
+        echo_action "Inserting patched module 'veth'"
+        sudo insmod veth.ko
+        if [ -e "i40e-2.4.6/src/i40e.ko" ] ; then
+            echo_action "Inserting patched module 'i40e'"
+            sudo insmod i40e-2.4.6/src/i40e.ko
+        fi
+    popd
+
+    # TODO move this to run_local
+    # Disable checksum and segmentation offload
+    sudo ethtool -K enp4s0f0 tx off rx off gso off tso off gro off
+    # Reduce the number of tx/rx rings (netmap does not need many)
+    sudo ethtool -L enp4s0f0 combined 4
+
+    # Copy pkt-gen (netmap) into container filesystem
+    pkt_gen_path=$(whereis -b pkt-gen | head -n 1 | cut -d ' ' -f2)
+    if [ -z "${pkt_gen_path}" ] ; then
+        echo "pkt-gen not found: is it installed?" 1>&2
+        exit
+    fi
+    echo_action "Installing netmap pktgen to rootfs"
+    cp "${pkt_gen_path}" "${DIR_ROOTFS}"
+
+    touch $NETMAP_CHECK_FILE
+}
+
+netmap_remove() {
+    echo_section "Removing netmap"
+
+    # IF NOT INSTALLED, SKIP
+    if [ ! -e $NETMAP_CHECK_FILE ]; then
+        echo_action "NOT INSTALLED -- SKIPPING"
+        return 0
+    fi
+
+    # Unload the modules (if loaded)
+    if lsmod | grep veth &> /dev/null ; then
+        echo_action "Removing patched module 'veth'"
+        sudo modprobe -r veth
+        echo_action "Reinserting original module 'veth'"
+        sudo insmod /lib/modules/$(uname -r)/kernel/drivers/net/veth.ko
+    fi
+    if lsmod | grep netmap &> /dev/null ; then
+        echo_action "Removing patched module 'netmap'"
+        sudo modprobe -r netmap
+    fi
+
+    # Remove the modules from disk
+    echo_action "RM /lib/modules/$(uname -r)/extra/veth.ko"
+    sudo rm -f /lib/modules/$(uname -r)/extra/veth.ko
+    echo_action "RM /lib/modules/$(uname -r)/extra/netmap.ko"
+    sudo rm -f /lib/modules/$(uname -r)/extra/netmap.ko
+
+    # Remove netmap sources
+    echo_action "RM $DIR_NETMAP_SRC"
+    rm -rf $DIR_NETMAP_SRC
+
+    # Remove the Linux kernel sources
+    echo_action "RM $DIR_KERNEL_SRC"
+    rm -rf $DIR_KERNEL_SRC
+}
+
 ################ CUSTOM PROGRAMS MANAGEMENT ################
 
 function bin_install() {
@@ -917,11 +1030,14 @@ function main_f() {
 
     DIR_OVS_SRC=$DIR_SRC/ovs
     DIR_SNABB_SRC=$DIR_SRC/snabb
+    DIR_NETMAP_SRC=$DIR_SRC/netmap
+    DIR_KERNEL_SRC=$DIR_SRC/linux
 
     ROOTFS_CHECK_FILE=$DIR_INSTALL/.rootfs-installed
     DPDK_CHECK_FILE=$DIR_INSTALL/.dpdk-${DPDK_VERSION}-installed
     OVS_CHECK_FILE=$DIR_INSTALL/.ovs-${OVS_VERSION}-installed
     SNABB_CHECK_FILE=$DIR_INSTALL/.snabb-installed
+    NETMAP_CHECK_FILE=$DIR_INSTALL/.netmap-installed
 
     SNABB_PROGRAM_NAME=custom_switch
     DIR_SNABB_PROGRAM=$DIR_SNABB_SRC/src/program/$SNABB_PROGRAM_NAME
@@ -948,6 +1064,7 @@ function main_f() {
         [[ "$args" == *_ovs_* ]] && ovs_install
         [[ "$args" == *_vpp_* ]] && vpp_install
         [[ "$args" == *_snabb_* ]] && snabb_install
+        [[ "$args" == *_netmap_* ]] && netmap_install
         [[ "$args" == *_bin_* ]] && bin_install
 
         finalize_install
@@ -958,6 +1075,7 @@ function main_f() {
         # NOTICE: ORDER MATTERS
 
         [[ "$args" == *_bin_* ]] && bin_remove
+        [[ "$args" == *_netmap_* ]] && netmap_remove
         [[ "$args" == *_snabb_* ]] && snabb_remove
         [[ "$args" == *_vpp_* ]] && vpp_remove
         [[ "$args" == *_ovs_* ]] && ovs_remove
