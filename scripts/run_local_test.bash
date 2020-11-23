@@ -834,11 +834,24 @@ function prepare_system_resources() {
     sudo insmod $HOME/testbed/install/dpdk-19.05/lib/modules/`uname -r`/extra/dpdk/igb_uio.ko 2>/dev/null || true
     # TODO: add insmod to sriov_tools
 
-    # Set processor to high performance, disable turbo boost
+    # Set governor to 'performance'
     for CPU_FREQ_GOVERNOR in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor;
     do [ -f $CPU_FREQ_GOVERNOR ] || continue;
         sudo echo -n performance | sudo tee $CPU_FREQ_GOVERNOR > /dev/null;
     done
+
+    # Avoid thermal throttling
+    FREQ_PERCENTAGE_1=$(($(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct) - $(cat /sys/devices/system/cpu/intel_pstate/turbo_pct) - 5))
+    FREQ_PERCENTAGE_2=$(($(cat /sys/devices/system/cpu/intel_pstate/turbo_pct) - 5))
+    if [ $FREQ_PERCENTAGE_1 -lt $FREQ_PERCENTAGE_2 ] ; then
+        FREQ_PERCENTAGE=$FREQ_PERCENTAGE_1
+    else
+        FREQ_PERCENTAGE=$FREQ_PERCENTAGE_2
+    fi
+    echo $FREQ_PERCENTAGE | sudo tee /sys/devices/system/cpu/intel_pstate/max_perf_pct > /dev/null
+    echo $FREQ_PERCENTAGE | sudo tee /sys/devices/system/cpu/intel_pstate/min_perf_pct > /dev/null
+
+    # Disable turbo boost
     echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo > /dev/null
 }
 
@@ -897,17 +910,15 @@ function start_applications() {
                 move_vale_port_to_container $i
             fi
 
-            if [ "${LXC_CONT_CMDNAMES[i]}" == send ] || [ "${LXC_CONT_CMDNAMES[i]}" == recv ] ; then
-                # Advertise (one packet) to let the switch learn its forwarding table
-                # Otherwise, transmissions would be broadcast.
-                local_iface_mac=${LXC_CONT_MACS[i]}
-                sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 1 -S ${local_iface_mac} >/dev/null
+            # Advertise (one packet) to let the switch learn its forwarding table
+            # Otherwise, transmissions would be broadcast.
+            local_iface_mac=${LXC_CONT_MACS[i]}
+            sudo lxc-attach -n ${LXC_CONT_NAMES[i]} -- ./pkt-gen -i ${LXC_CONT_NETMAP_LOCAL_IF[i]} -f tx -n 1 -S ${local_iface_mac} >/dev/null
 
-                if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
-                    # Find the MAC of the target
-                    remote_iface_mac=${LXC_CONT_OTHER_MACS[i]}
-                    COMMANDS[$i]="${COMMANDS[i]} -D $remote_iface_mac"
-                fi
+            if [ "${LXC_CONT_CMDNAMES[i]}" == send ] ; then
+                # Find the MAC of the target
+                remote_iface_mac=${LXC_CONT_OTHER_MACS[i]}
+                COMMANDS[$i]="${COMMANDS[i]} -D $remote_iface_mac"
             fi
         fi
 
