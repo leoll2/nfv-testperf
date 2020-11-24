@@ -23,6 +23,7 @@ nfv_socket_ptr nfv_socket_factory_get(config_ptr conf) {
     struct nfv_socket base;
     struct nfv_socket_simple *socket_simple;
     struct nfv_socket_dpdk *socket_dpdk;
+    struct nfv_socket_netmap *socket_netmap;
 
     // Initialize base attributes
     nfv_socket_init(&base, conf);
@@ -32,7 +33,6 @@ nfv_socket_ptr nfv_socket_factory_get(config_ptr conf) {
     case NFV_SOCK_RAW:
         // case NFV_SOCK_SIMPLE:
         socket_simple = malloc(sizeof(struct nfv_socket_simple));
-
 #ifdef USE_FPTRS
         // Update methods and set base class pointer
         base.request_out_buffers = nfv_socket_simple_request_out_buffers;
@@ -48,7 +48,6 @@ nfv_socket_ptr nfv_socket_factory_get(config_ptr conf) {
 
     case NFV_SOCK_DPDK:
         socket_dpdk = malloc(sizeof(struct nfv_socket_dpdk));
-
 #ifdef USE_FPTRS
         // Initialize methods of subclass
         base.request_out_buffers = nfv_socket_dpdk_request_out_buffers;
@@ -58,10 +57,25 @@ nfv_socket_ptr nfv_socket_factory_get(config_ptr conf) {
 #else
         base.classcode = NFV_SOCK_DPDK;
 #endif
-
         socket_dpdk->super = base;
         nfv_socket_dpdk_init((nfv_socket_ptr)socket_dpdk, conf);
         return (nfv_socket_ptr)socket_dpdk;
+
+    case NFV_SOCK_NETMAP:
+        socket_netmap = malloc(sizeof(struct nfv_socket_netmap));
+#ifdef USE_FPTRS
+        // Initialize methods of subclass
+        base.request_out_buffers = nfv_socket_netmap_request_out_buffers;
+        base.send = nfv_socket_netmap_send;
+        base.recv = nfv_socket_netmap_recv;
+        base.send_back = nfv_socket_netmap_send_back;
+#else
+        base.classcode = NFV_SOCK_NETMAP;
+#endif
+        socket_netmap->super = base;
+        nfv_socket_netmap_init((nfv_socket_ptr)socket_netmap, conf);
+        return (nfv_socket_ptr)socket_netmap;
+
     default:
         assert(false);
         return NULL;
@@ -75,6 +89,8 @@ nfv_socket_ptr nfv_socket_factory_get(config_ptr conf) {
         return nfv_socket_simple_##method(self, ##__VA_ARGS__);                \
     else if ((self->classcode & NFV_SOCK_DPDK) != 0)                           \
         return nfv_socket_dpdk_##method(self, ##__VA_ARGS__);                  \
+    else if ((self->classcode & NFV_SOCK_NETMAP) != 0)                         \
+        return nfv_socket_netmap_##method(self, ##__VA_ARGS__);                \
     return 0;
 
 NFV_SIGNATURE(size_t, request_out_buffers, buffer_t buffers[], size_t howmany) {
